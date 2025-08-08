@@ -1,0 +1,46 @@
+# Virtual environment (conda or venv)
+env_zada/
+env_apZD/
+flask_env/
+venv/
+
+# PyCharm or VSCode project files
+.vscode/
+.idea/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables or secrets files
+.env
+*.env
+
+# Flask instance folder / config
+instance/
+*.db
+
+# Logs
+*.log
+
+# Shapefiles and GIS data files (ignore common shapefile extensions)
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+
+# Distribution / build folders
+build/
+dist/
+*.egg-info
+
+# Jupyter Notebook checkpoints (if any)
+.ipynb_checkpoints
+
+# Windows thumbnail cache
+Thumbs.db
+
+# contenus de dossier 
+uploads/

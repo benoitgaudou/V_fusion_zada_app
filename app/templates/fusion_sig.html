@@ -1,0 +1,327 @@
+<!-- ============================================================================ -->
+<!-- templates/fusion_sig.html - Interface de fusion par critères SIG -->
+<!-- ============================================================================ -->
+
+{% extends "base.html" %}
+
+{% block title %}Fusion SIG - ZADA Fusion{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="card-title mb-0">
+                    <i class="fas fa-layer-group me-2"></i>
+                    Configuration de la fusion
+                </h4>
+            </div>
+            <div class="card-body">
+                {% if not loaded_files %}
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    Aucun fichier chargé. 
+                    <a href="{{ url_for('main.home') }}" class="alert-link">Retour à l'accueil</a>
+                </div>
+                {% else %}
+                <form id="fusionForm">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="mb-3">
+                        {{ form.criterion.label(class="form-label") }}
+                        {{ form.criterion(class="form-select", id="criterionSelect") }}
+                        <div class="form-text">
+                            Sélectionnez la colonne pour grouper/fusionner les données
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        {{ form.area_threshold.label(class="form-label") }}
+                        <div class="input-group">
+                            {{ form.area_threshold(class="form-control") }}
+                            <span class="input-group-text">m²</span>
+                        </div>
+                    </div>
+                    
+                    <div class="d-grid">
+                        {{ form.submit(class="btn btn-primary", id="fusionBtn") }}
+                    </div>
+                </form>
+                
+                <!-- Statistiques de fusion -->
+                <div id="fusionStats" class="mt-4" style="display: none;">
+                    <div class="card">
+                        <div class="card-header bg-info text-white">
+                            <h6 class="card-title mb-0">Résultats de la fusion</h6>
+                        </div>
+                        <div class="card-body" id="statsContent">
+                            <!-- Sera rempli dynamiquement -->
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Fichiers source -->
+        {% if loaded_files %}
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="card-title mb-0">
+                    <i class="fas fa-database me-2"></i>
+                    Fichiers sources ({{ loaded_files|length }})
+                </h6>
+            </div>
+            <div class="card-body">
+                {% for file in loaded_files %}
+                <div class="small border rounded p-2 mb-1">
+                    <strong>{{ file.name }}</strong><br>
+                    <span class="text-muted">{{ file.count }} entités</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header bg-secondary text-white">
+                <h4 class="card-title mb-0">
+                    <i class="fas fa-map me-2"></i>
+                    Visualisation de la fusion
+                </h4>
+            </div>
+            <div class="card-body p-0">
+                <div id="map" style="height: 600px; width: 100%;"></div>
+                
+                <!-- Contrôles de la carte -->
+                <div class="position-absolute top-0 end-0 m-3" style="z-index: 1000;">
+                    <div class="btn-group-vertical">
+                        <button class="btn btn-sm btn-outline-secondary" id="resetViewBtn" title="Réinitialiser la vue">
+                            <i class="fas fa-home"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" id="toggleLegendBtn" title="Afficher/Masquer la légende">
+                            <i class="fas fa-list"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Légende -->
+                <div id="mapLegend" class="position-absolute bottom-0 start-0 m-3 bg-white p-2 rounded shadow" style="z-index: 1000; display: none;">
+                    <h6 class="mb-2">Légende</h6>
+                    <div id="legendContent">
+                        <!-- Sera rempli dynamiquement -->
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Barre de chargement -->
+        <div id="loadingBar" class="progress mt-3" style="display: none;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 100%">
+                <i class="fas fa-cog fa-spin me-2"></i>Fusion en cours...
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let map;
+let currentLayer;
+let fusionResults = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialiser la carte
+    initializeMap();
+    
+    // Gestionnaire de formulaire
+    document.getElementById('fusionForm').addEventListener('submit', handleFusionSubmit);
+    
+    // Gestionnaires des contrôles carte
+    document.getElementById('resetViewBtn').addEventListener('click', resetMapView);
+    document.getElementById('toggleLegendBtn').addEventListener('click', toggleLegend);
+});
+
+function initializeMap() {
+    map = L.map('map').setView([14.0583, 108.2772], 6); // Centré sur le Vietnam
+    
+    // Couche de base
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+    
+    // Message initial
+    const initialMessage = L.control({position: 'topleft'});
+    initialMessage.onAdd = function(map) {
+        const div = L.DomUtil.create('div', 'leaflet-control-custom');
+        div.innerHTML = '<div class="alert alert-info m-0"><i class="fas fa-info-circle me-2"></i>Configurez la fusion pour afficher les résultats</div>';
+        return div;
+    };
+    initialMessage.addTo(map);
+}
+
+function handleFusionSubmit(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(e.target);
+    const criterion = formData.get('criterion');
+    
+    if (!criterion) {
+        alert('Veuillez sélectionner un critère de fusion');
+        return;
+    }
+    
+    // Afficher le chargement
+    showLoading(true);
+    
+    // Requête AJAX pour la fusion
+    fetch('{{ url_for("main.process_fusion") }}', {
+        method: 'POST',
+        body: formData,
+        headers: {
+            'X-CSRFToken': document.querySelector('[name=csrf_token]').value
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        showLoading(false);
+        
+        if (data.success) {
+            fusionResults = data;
+            displayFusionResults(data);
+            updateMap(data.map_data);
+            showFusionStats(data.statistics);
+        } else {
+            alert('Erreur lors de la fusion: ' + data.error);
+        }
+    })
+    .catch(error => {
+        showLoading(false);
+        console.error('Erreur:', error);
+        alert('Erreur de communication avec le serveur');
+    });
+}
+
+function displayFusionResults(results) {
+    // Mettre à jour la carte avec les nouvelles données
+    if (currentLayer) {
+        map.removeLayer(currentLayer);
+    }
+    
+    if (results.map_data && results.map_data.features.length > 0) {
+        currentLayer = L.geoJSON(results.map_data, {
+            style: function(feature) {
+                return feature.properties.style || {
+                    color: '#3388ff',
+                    fillColor: '#3388ff',
+                    fillOpacity: 0.6,
+                    weight: 2
+                };
+            },
+            onEachFeature: function(feature, layer) {
+                // Popup avec les propriétés
+                let popupContent = '<div class="small">';
+                for (const [key, value] of Object.entries(feature.properties)) {
+                    if (key !== 'style' && value !== null && value !== undefined) {
+                        popupContent += `<strong>${key}:</strong> ${value}<br>`;
+                    }
+                }
+                popupContent += '</div>';
+                layer.bindPopup(popupContent);
+            }
+        }).addTo(map);
+        
+        // Ajuster la vue sur les données
+        map.fitBounds(currentLayer.getBounds());
+        
+        // Mettre à jour la légende
+        updateLegend(results);
+    }
+}
+
+function updateMap(geoJsonData) {
+    // Cette fonction sera appelée quand on aura les vraies données
+    console.log('Données GeoJSON reçues:', geoJsonData);
+}
+
+function showFusionStats(stats) {
+    const statsDiv = document.getElementById('fusionStats');
+    const statsContent = document.getElementById('statsContent');
+    
+    let statsHtml = `
+        <div class="row text-center">
+            <div class="col-4">
+                <div class="h5 text-primary">${stats.total_features || 0}</div>
+                <small class="text-muted">Total</small>
+            </div>
+            <div class="col-4">
+                <div class="h5 text-danger">${stats.intersections || 0}</div>
+                <small class="text-muted">Intersections</small>
+            </div>
+            <div class="col-4">
+                <div class="h5 text-info">${stats.differences || 0}</div>
+                <small class="text-muted">Différences</small>
+            </div>
+        </div>
+    `;
+    
+    statsContent.innerHTML = statsHtml;
+    statsDiv.style.display = 'block';
+}
+
+function updateLegend(results) {
+    const legendContent = document.getElementById('legendContent');
+    
+    // Exemple de légende basée sur les types
+    const legendItems = [
+        { color: '#FF6B6B', label: 'Intersections', count: results.statistics.intersections || 0 },
+        { color: '#4ECDC4', label: 'Zones uniques', count: results.statistics.differences || 0 }
+    ];
+    
+    let legendHtml = '';
+    legendItems.forEach(item => {
+        if (item.count > 0) {
+            legendHtml += `
+                <div class="d-flex align-items-center mb-1">
+                    <div style="width: 15px; height: 15px; background-color: ${item.color}; border: 1px solid #ccc; margin-right: 8px;"></div>
+                    <small>${item.label} (${item.count})</small>
+                </div>
+            `;
+        }
+    });
+    
+    legendContent.innerHTML = legendHtml;
+}
+
+function showLoading(show) {
+    const loadingBar = document.getElementById('loadingBar');
+    const fusionBtn = document.getElementById('fusionBtn');
+    
+    if (show) {
+        loadingBar.style.display = 'block';
+        fusionBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Fusion en cours...';
+        fusionBtn.disabled = true;
+    } else {
+        loadingBar.style.display = 'none';
+        fusionBtn.innerHTML = '<i class="fas fa-layer-group me-2"></i>Fusionner selon ce critère';
+        fusionBtn.disabled = false;
+    }
+}
+
+function resetMapView() {
+    if (currentLayer) {
+        map.fitBounds(currentLayer.getBounds());
+    } else {
+        map.setView([14.0583, 108.2772], 6);
+    }
+}
+
+function toggleLegend() {
+    const legend = document.getElementById('mapLegend');
+    legend.style.display = legend.style.display === 'none' ? 'block' : 'none';
+}
+</script>
+{% endblock %}

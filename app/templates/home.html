@@ -1,0 +1,152 @@
+<!-- ============================================================================ -->
+<!-- templates/home.html - Page d'accueil et chargement de fichiers -->
+<!-- ============================================================================ -->
+
+{% extends "base.html" %}
+
+{% block title %}Accueil - ZADA Fusion{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h4 class="card-title mb-0">
+                    <i class="fas fa-upload me-2"></i>
+                    Chargement des fichiers ZADA
+                </h4>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('main.upload_files') }}" enctype="multipart/form-data" id="uploadForm">
+                    {{ form.hidden_tag() }}
+                    
+                    <div class="mb-3">
+                        {{ form.files.label(class="form-label") }}
+                        {{ form.files(class="form-control", accept=".shp,.geojson,.zip") }}
+                        <div class="form-text">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Formats acceptés: .shp (avec .shx, .dbf), .geojson, .zip contenant des shapefiles
+                        </div>
+                        {% for error in form.files.errors %}
+                            <div class="text-danger small">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                    
+                    <div class="mb-3">
+                        {{ form.area_threshold.label(class="form-label") }}
+                        <div class="input-group">
+                            {{ form.area_threshold(class="form-control") }}
+                            <span class="input-group-text">m²</span>
+                        </div>
+                        <div class="form-text">
+                            Polygones plus petits que ce seuil seront supprimés après fusion
+                        </div>
+                        {% for error in form.area_threshold.errors %}
+                            <div class="text-danger small">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+                    
+                    <div class="d-grid">
+                        {{ form.submit(class="btn btn-primary btn-lg") }}
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Informations sur ZADA -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-question-circle me-2"></i>
+                    À propos de la fusion ZADA
+                </h5>
+            </div>
+            <div class="card-body">
+                <p class="card-text">
+                    La méthode ZADA (Zonage à Dire d'Acteurs) permet de fusionner différentes 
+                    couches géospatiales en identifiant:
+                </p>
+                <ul class="list-unstyled">
+                    <li><i class="fas fa-intersection text-danger me-2"></i><strong>Intersections:</strong> Zones communes entre plusieurs sources</li>
+                    <li><i class="fas fa-puzzle-piece text-info me-2"></i><strong>Différences:</strong> Zones uniques à chaque source</li>
+                    <li><i class="fas fa-filter text-warning me-2"></i><strong>Filtrage:</strong> Suppression des micro-polygones selon le seuil</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <!-- Fichiers chargés -->
+        {% if loaded_files %}
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-check-circle me-2"></i>
+                    Fichiers chargés ({{ loaded_files|length }})
+                </h5>
+            </div>
+            <div class="card-body">
+                {% for file in loaded_files %}
+                <div class="border rounded p-2 mb-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <strong class="text-primary">{{ file.name }}</strong>
+                        <span class="badge bg-secondary">{{ file.count }} entités</span>
+                    </div>
+                    <small class="text-muted">
+                        Colonnes: {{ file.columns|length }}
+                        {% if file.columns|length > 0 %}
+                            ({{ file.columns[:3]|join(', ') }}{% if file.columns|length > 3 %}...{% endif %})
+                        {% endif %}
+                    </small>
+                </div>
+                {% endfor %}
+                
+                <div class="d-grid mt-3">
+                    <a href="{{ url_for('main.fusion_sig') }}" class="btn btn-success">
+                        <i class="fas fa-arrow-right me-2"></i>
+                        Continuer vers la fusion
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-info-circle me-2"></i>
+                    Instructions
+                </h5>
+            </div>
+            <div class="card-body">
+                <ol class="small">
+                    <li>Sélectionnez vos fichiers shapefiles ou GeoJSON</li>
+                    <li>Ajustez le seuil de superficie si nécessaire</li>
+                    <li>Cliquez sur "Charger les fichiers"</li>
+                    <li>Procédez à la fusion selon vos critères</li>
+                </ol>
+                
+                <div class="alert alert-info small mt-3">
+                    <i class="fas fa-lightbulb me-2"></i>
+                    <strong>Astuce:</strong> Pour les shapefiles, assurez-vous d'avoir 
+                    les fichiers .shp, .shx et .dbf. Vous pouvez aussi uploader un ZIP.
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('uploadForm');
+    const submitBtn = form.querySelector('button[type="submit"]');
+    
+    form.addEventListener('submit', function() {
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Chargement...';
+        submitBtn.disabled = true;
+    });
+});
+</script>
+{% endblock %}
