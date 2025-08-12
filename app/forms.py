@@ -1,49 +1,57 @@
+# app/forms.py
 # ============================================================================
-# app/forms.py - Formulaires Flask-WTF
+# Formulaires Flask‑WTF pour chargement SIG et fusion par critère
 # ============================================================================
 
 from flask_wtf import FlaskForm
-from flask_wtf.file import FileField, FileAllowed, FileRequired
-from wtforms import (StringField, FloatField, SelectField, TextAreaField, 
-                     SubmitField, IntegerField)
+from flask_wtf.file import FileAllowed, FileRequired, MultipleFileField
+from wtforms import SelectField, FloatField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, NumberRange, Optional
 
+
 class FileUploadForm(FlaskForm):
-    """Formulaire de chargement de fichiers géospatiaux"""
-    
-    files = FileField(
-        'Fichiers Shapefiles/GeoJSON',
+    """Formulaire de chargement des fichiers géospatiaux (ZIP Shapefile / GeoJSON)."""
+
+    # MultipleFileField = vrai multi-upload (mieux que FileField + render_kw={"multiple": True})
+    # forms.py (champ files)
+    files = MultipleFileField(
+        "Fichiers (ZIP Shapefile / GeoJSON)",
         validators=[
-            FileRequired("Veuillez sélectionner au moins un fichier"),
-            FileAllowed(['shp', 'geojson', 'zip'], 'Fichiers acceptés: .zip (shapefile), .geojson')
+            FileRequired("Veuillez sélectionner au moins un fichier."),
+            FileAllowed(["zip", "geojson", "json"], "Formats acceptés : .zip / .geojson / .json"),
         ],
-        render_kw={"multiple": True}
+        render_kw={"accept": ".zip,.geojson,.json"},
     )
-    
+
     area_threshold = FloatField(
-        'Seuil de superficie (m²)',
-        default=100,
-        validators=[NumberRange(min=0, message="Le seuil doit être positif")]
+        "Seuil de superficie (m²)",
+        default=100.0,
+        validators=[NumberRange(min=0, message="Le seuil doit être positif.")],
+        description="Micro‑polygones sous ce seuil seront filtrés après fusion.",
     )
-    
-    submit = SubmitField('Charger les fichiers')
+
+    submit = SubmitField("Charger")
+
 
 class FusionSIGForm(FlaskForm):
-    """Formulaire de fusion par critères SIG"""
-    
+    """Formulaire de lancement de fusion + critère optionnel pour la carte."""
+
     criterion = SelectField(
-        'Critère de fusion',
-        choices=[],  # Sera rempli dynamiquement
-        validators=[DataRequired("Veuillez sélectionner un critère")]
+        "Critère (optionnel)",
+        choices=[("", "— Choisir un champ —")],  # sera surchargé dynamiquement
+        validators=[Optional()],
+        description="Champ attributaire pour colorer/filtrer la carte (catégoriel de préférence).",
     )
-    
+
     area_threshold = FloatField(
-        'Seuil de superficie (m²)',
-        default=100,
-        validators=[NumberRange(min=0)]
+        "Seuil de superficie (m²)",
+        default=100.0,
+        validators=[DataRequired(message="Le seuil de superficie est requis."),
+                    NumberRange(min=0, message="Le seuil doit être positif.")],
     )
-    
-    submit = SubmitField('Fusionner selon ce critère')
+
+    submit = SubmitField("Lancer la fusion")
+
 
 class NLPQueryForm(FlaskForm):
     """Formulaire de recherche sémantique NLP"""

@@ -44,3 +44,8 @@ Thumbs.db
 
 # contenus de dossier 
 uploads/
+out/
+results/
+stage_geojson/
+Donnees/
+

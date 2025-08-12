@@ -1,62 +1,39 @@
 // ============================================================================
-// static/js/leaflet_script.js - Script principal pour les fonctionnalités carte
+// static/js/leaflet_script.js - Version simplifiée pour cartographie thématique
 // ============================================================================
 
-/**
- * Gestionnaire principal des cartes Leaflet pour l'application ZADA
- */
 class ZADAMapManager {
     constructor() {
         this.maps = new Map();
         this.layers = new Map();
         this.controls = new Map();
-        this.colorPalette = {
-            intersection: '#FF6B6B',
-            difference: '#4ECDC4', 
-            original: '#45B7D1',
-            filtered: '#96CEB4'
-        };
-        this.defaultCenter = [14.8667, -16.8667]; // 
+
+        // plus de palette par type d'intersection – on laisse un style neutre
+        this.defaultCenter = [14.0583, 108.2772];
         this.defaultZoom = 6;
+
+        // Thématique
+        this.thematicLayer = null;
+        this.currentThematicField = null;
+        this.availableFields = [];
     }
 
-    /**
-     * Initialise une carte Leaflet
-     * @param {string} containerId - ID du conteneur de la carte
-     * @param {Object} options - Options de configuration
-     */
     initializeMap(containerId, options = {}) {
-        const defaultOptions = {
-            center: this.defaultCenter,
-            zoom: this.defaultZoom,
+        const map = L.map(containerId, {
+            center: options.center || this.defaultCenter,
+            zoom: options.zoom || this.defaultZoom,
             zoomControl: true,
             attributionControl: true
-        };
-
-        const mapOptions = { ...defaultOptions, ...options };
-        
-        // Créer la carte
-        const map = L.map(containerId, {
-            center: mapOptions.center,
-            zoom: mapOptions.zoom,
-            zoomControl: mapOptions.zoomControl,
-            attributionControl: mapOptions.attributionControl
         });
 
-        // Ajouter la couche de base
         this.addBaseLayers(map);
 
-        // Stocker la référence
         this.maps.set(containerId, map);
         this.layers.set(containerId, new Map());
 
         return map;
     }
 
-    /**
-     * Ajoute les couches de base à la carte
-     * @param {L.Map} map - Instance de carte Leaflet
-     */
     addBaseLayers(map) {
         const baseLayers = {
             'OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -66,920 +43,386 @@ class ZADAMapManager {
             'CartoDB Positron': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
                 attribution: '© CartoDB © OpenStreetMap contributors',
                 maxZoom: 19
-            }),
-            'Satellite': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-                attribution: 'Esri, DigitalGlobe, GeoEye, Earthstar Geographics',
-                maxZoom: 18
             })
         };
-
-        // Ajouter la couche par défaut
         baseLayers['OpenStreetMap'].addTo(map);
-
-        // Ajouter le contrôle des couches si plusieurs options
-        if (Object.keys(baseLayers).length > 1) {
-            L.control.layers(baseLayers).addTo(map);
-        }
+        L.control.layers(baseLayers).addTo(map);
     }
 
-    /**
-     * Ajoute des données GeoJSON à la carte
-     * @param {string} mapId - ID de la carte
-     * @param {Object} geoJsonData - Données GeoJSON
-     * @param {string} layerName - Nom de la couche
-     * @param {Object} options - Options de style et comportement
-     */
-    addGeoJsonLayer(mapId, geoJsonData, layerName, options = {}) {
-        const map = this.maps.get(mapId);
-        if (!map) {
-            console.error(`Carte ${mapId} non trouvée`);
-            return null;
-        }
-
-        const defaultOptions = {
-            style: this.getDefaultStyle.bind(this),
-            onEachFeature: this.getDefaultPopup.bind(this),
-            pointToLayer: this.getDefaultMarker.bind(this),
-            filter: null
-        };
-
-        const layerOptions = { ...defaultOptions, ...options };
-
-        // Créer la couche GeoJSON
-        const geoJsonLayer = L.geoJSON(geoJsonData, {
-            style: layerOptions.style,
-            onEachFeature: layerOptions.onEachFeature,
-            pointToLayer: layerOptions.pointToLayer,
-            filter: layerOptions.filter
-        });
-
-        // Ajouter à la carte
-        geoJsonLayer.addTo(map);
-
-        // Stocker la référence
-        const mapLayers = this.layers.get(mapId);
-        mapLayers.set(layerName, geoJsonLayer);
-
-        return geoJsonLayer;
-    }
-
-    /**
-     * Style par défaut pour les features
-     * @param {Object} feature - Feature GeoJSON
-     */
-    getDefaultStyle(feature) {
-        const intersectionType = feature.properties.intersection_type || 'original';
-        const baseColor = this.colorPalette[intersectionType] || '#3388ff';
-
+    // Style neutre (utilisé si la feature n’a pas de style)
+    getDefaultStyle(/* feature */) {
         return {
-            color: baseColor,
-            fillColor: baseColor,
-            fillOpacity: 0.6,
+            color: '#3388ff',
+            fillColor: '#3388ff',
+            fillOpacity: 0.5,
             weight: 2,
-            opacity: 0.8
+            opacity: 0.9
         };
     }
 
-    /**
-     * Popup par défaut pour les features
-     * @param {Object} feature - Feature GeoJSON
-     * @param {L.Layer} layer - Couche Leaflet
-     */
-    getDefaultPopup(feature, layer) {
-        if (!feature.properties) return;
+    // Style thématique : on respecte feature.properties.style si présent
+    getThematicStyle(feature) {
+        if (feature?.properties?.style) return feature.properties.style;
+        return this.getDefaultStyle(feature);
+    }
 
-        let popupContent = '<div class="popup-content">';
-        
-        // Titre basé sur le type
-        const type = feature.properties.intersection_type || 'Zone';
-        popupContent += `<h6 class="popup-title">${this.getTypeLabel(type)}</h6>`;
+    getThematicPopup(feature, layer) {
+        if (!feature?.properties) return;
+        const p = feature.properties;
+        const rows = [
+            p.thematic_field ? ['Champ', p.thematic_field] : null,
+            p.thematic_value ? ['Valeur', p.thematic_value] : null,
+            p.thematic_label ? ['Classe', p.thematic_label] : null,
+            p.source_names ? ['Sources', p.source_names] : null,
+        ].filter(Boolean);
 
-        // Propriétés importantes
-        const importantProps = ['source_names', 'similarity', 'area'];
-        const otherProps = [];
-
-        for (const [key, value] of Object.entries(feature.properties)) {
-            if (key === 'style' || key === 'intersection_type') continue;
-            
-            if (value !== null && value !== undefined && value !== '') {
-                if (importantProps.includes(key)) {
-                    popupContent += this.formatPropertyRow(key, value, true);
-                } else {
-                    otherProps.push([key, value]);
-                }
-            }
-        }
-
-        // Ajouter les autres propriétés
-        if (otherProps.length > 0) {
-            popupContent += '<hr class="my-2">';
-            otherProps.slice(0, 5).forEach(([key, value]) => {
-                popupContent += this.formatPropertyRow(key, value, false);
+        let html = `<div class="thematic-popup"><h6><i class="fas fa-palette me-1"></i><strong>Cartographie thématique</strong></h6>`;
+        if (rows.length) {
+            html += `<table class="table table-sm table-borderless mb-0">`;
+            rows.forEach(([k, v]) => {
+                html += `<tr><td><strong>${k}:</strong></td><td>${String(v)}</td></tr>`;
             });
-
-            if (otherProps.length > 5) {
-                popupContent += `<small class="text-muted">... et ${otherProps.length - 5} autres propriétés</small>`;
-            }
+            html += `</table>`;
         }
+        html += `</div>`;
 
-        popupContent += '</div>';
+        layer.bindPopup(html, { maxWidth: 300, className: 'thematic-popup' });
+    }
 
-        layer.bindPopup(popupContent, {
-            maxWidth: 300,
-            className: 'custom-popup'
+    // ------------------------ Thématique ------------------------
+
+    initializeThematicMapping() {
+        const fieldSelect = document.getElementById('thematic-field-select');
+        const paletteSelect = document.getElementById('color-palette-select');
+        const generateBtn  = document.getElementById('generate-thematic-map');
+
+        if (!fieldSelect || !paletteSelect || !generateBtn) return;
+
+        fieldSelect.addEventListener('change', () => {
+            generateBtn.disabled = !fieldSelect.value;
+            this.hideThematicLegend();
+            this.hideStatus();
+            this.showFieldPreview(fieldSelect.value);
+        });
+
+        generateBtn.addEventListener('click', () => this.generateThematicMap());
+
+        // Charger la liste des champs (provenant du résultat de fusion côté serveur)
+        this.loadAvailableFields();
+    }
+
+    loadAvailableFields() {
+        // Nouvelle route simplifiée
+        fetch('/api/fields')
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) throw new Error(data.error || 'Erreur /api/fields');
+                this.availableFields = data.fields || [];
+                this.populateFieldSelect(this.availableFields);
+
+                // Afficher la section si au moins un champ
+                if (this.availableFields.length) {
+                    const sec = document.getElementById('thematic-mapping-section');
+                    if (sec) sec.style.display = 'block';
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                this.showStatus('danger', 'Impossible de charger la liste des champs');
+            });
+    }
+
+    populateFieldSelect(fields) {
+        const select = document.getElementById('thematic-field-select');
+        if (!select) return;
+        select.innerHTML = '<option value="">Sélectionner un champ...</option>';
+
+        fields.forEach(f => {
+            const opt = document.createElement('option');
+            opt.value = f.name;
+            opt.textContent = f.label || f.name;
+            opt.title = `${f.type || 'type inconnu'} • ${f.unique_count ?? '?'} valeurs`;
+            select.appendChild(opt);
         });
     }
 
-    /**
-     * Marqueur par défaut pour les points
-     * @param {Object} feature - Feature GeoJSON
-     * @param {L.LatLng} latlng - Coordonnées
-     */
-    getDefaultMarker(feature, latlng) {
-        const intersectionType = feature.properties.intersection_type || 'original';
-        const color = this.colorPalette[intersectionType] || '#3388ff';
-
-        return L.circleMarker(latlng, {
-            radius: 8,
-            fillColor: color,
-            color: '#fff',
-            weight: 2,
-            opacity: 1,
-            fillOpacity: 0.8
-        });
+    showFieldPreview(fieldName) {
+        if (!fieldName) return;
+        fetch(`/api/field-analysis/${encodeURIComponent(fieldName)}`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) return;
+                this.renderFieldPreview(data.analysis);
+            })
+            .catch(() => {/* silencieux */});
     }
 
-    /**
-     * Formate une ligne de propriété pour le popup
-     * @param {string} key - Clé de la propriété
-     * @param {*} value - Valeur de la propriété
-     * @param {boolean} important - Si la propriété est importante
-     */
-    formatPropertyRow(key, value, important = false) {
-        const label = this.formatPropertyLabel(key);
-        const formattedValue = this.formatPropertyValue(key, value);
-        const weight = important ? 'fw-bold' : '';
+    renderFieldPreview(analysis) {
+        const preview = document.getElementById('field-preview');
+        const content = document.getElementById('field-preview-content');
+        if (!preview || !content) return;
 
-        return `
-            <div class="d-flex justify-content-between align-items-center mb-1">
-                <span class="text-muted ${weight}">${label}:</span>
-                <span class="${weight}">${formattedValue}</span>
-            </div>
+        let html = `
+            <div class="field-preview-stats">
+                <span class="field-preview-stat"><strong>Type:</strong> ${analysis.data_type}</span>
+                <span class="field-preview-stat"><strong>Uniques:</strong> ${analysis.unique_count}</span>
+                <span class="field-preview-stat"><strong>Valides:</strong> ${analysis.valid_values ?? (analysis.total_values - (analysis.null_values||0))}/${analysis.total_values}</span>
         `;
-    }
-
-    /**
-     * Formate le label d'une propriété
-     * @param {string} key - Clé de la propriété
-     */
-    formatPropertyLabel(key) {
-        const labelMap = {
-            'source_names': 'Sources',
-            'intersection_type': 'Type',
-            'similarity': 'Similarité',
-            'area': 'Superficie',
-            'original_source_name': 'Source origine'
-        };
-
-        return labelMap[key] || key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-    }
-
-    /**
-     * Formate la valeur d'une propriété
-     * @param {string} key - Clé de la propriété
-     * @param {*} value - Valeur à formater
-     */
-    formatPropertyValue(key, value) {
-        if (key === 'similarity' && typeof value === 'number') {
-            return `${(value * 100).toFixed(1)}%`;
+        if ((analysis.null_values || 0) > 0) {
+            html += `<span class="field-preview-stat" style="background:#fff3cd;border-color:#ffeaa7;"><strong>Nulles:</strong> ${analysis.null_values}</span>`;
         }
-        
-        if (key === 'area' && typeof value === 'number') {
-            if (value > 1000000) {
-                return `${(value / 1000000).toFixed(2)} km²`;
-            } else {
-                return `${value.toFixed(0)} m²`;
+        html += `</div>`;
+
+        if (analysis.data_type?.includes('numeric')) {
+            html += `
+                <div class="field-preview-values mt-2">
+                    <strong>Stats:</strong> 
+                    Min: ${toNum(analysis.min_value)}, 
+                    Max: ${toNum(analysis.max_value)}, 
+                    Moy: ${toNum(analysis.mean_value)}
+                </div>
+            `;
+        }
+
+        if (analysis.sample_values?.length) {
+            const vals = analysis.sample_values.slice(0, 5).join(', ');
+            html += `<div class="field-preview-values mt-2"><strong>Échantillon:</strong> ${vals}${analysis.sample_values.length>5?'...':''}</div>`;
+        }
+
+        content.innerHTML = html;
+        preview.style.display = 'block';
+
+        function toNum(v){ return (typeof v==='number') ? v.toFixed(2) : (v ?? 'N/A'); }
+    }
+
+    generateThematicMap() {
+        const field = document.getElementById('thematic-field-select')?.value;
+        const palette = document.getElementById('color-palette-select')?.value || 'default';
+        if (!field) {
+            this.showStatus('warning', 'Veuillez sélectionner un champ'); 
+            return;
+        }
+
+        this.showStatus('info', `Génération de la carte thématique pour « ${field} »...`, true);
+
+        fetch(`/api/thematic-map/${encodeURIComponent(field)}?palette=${encodeURIComponent(palette)}`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) throw new Error(data.error || 'Génération échouée');
+
+                this.updateMapWithThematicData(data);
+
+                // Légende
+                if (data.legend) this.displayThematicLegend(data.legend);
+
+                // Fit bounds
+                const map = this.maps.get('map');
+                if (map && data.map_bounds) map.fitBounds(data.map_bounds, { padding: [10, 10] });
+
+                this.currentThematicField = field;
+                this.showStatus('success', 'Carte thématique générée !');
+                this.injectExportButton(field, palette);
+            })
+            .catch(err => {
+                console.error(err);
+                this.showStatus('danger', `Erreur: ${err.message}`);
+            });
+    }
+
+    updateMapWithThematicData(thematicData) {
+        const map = this.maps.get('map');
+        if (!map) return;
+
+        if (this.thematicLayer && map.hasLayer(this.thematicLayer)) {
+            map.removeLayer(this.thematicLayer);
+        }
+        if (!thematicData.geojson || !thematicData.geojson.features?.length) {
+            this.showStatus('warning', 'Aucune entité à afficher');
+            return;
+        }
+
+        this.thematicLayer = L.geoJSON(thematicData.geojson, {
+            style: this.getThematicStyle.bind(this),
+            onEachFeature: this.getThematicPopup.bind(this),
+        }).addTo(map);
+
+        const mapLayers = this.layers.get('map');
+        if (mapLayers) mapLayers.set('thematic', this.thematicLayer);
+    }
+
+    displayThematicLegend(legend) {
+        const box = document.getElementById('thematic-legend');
+        const content = document.getElementById('thematic-legend-content');
+        if (!box || !content) return;
+
+        if (!legend.items?.length) { this.hideThematicLegend(); return; }
+
+        let html = '';
+        if (legend.type === 'discrete') {
+            html += '<h6 class="mb-2">Légende par valeurs :</h6>';
+            legend.items.forEach(it => {
+                html += `
+                    <div class="thematic-legend-item">
+                        <div class="thematic-color-box" style="background-color:${it.color};"></div>
+                        <span class="thematic-label">${it.label}</span>
+                        ${it.count ? `<span class="thematic-count">${it.count}</span>` : ''}
+                    </div>`;
+            });
+        } else if (legend.type === 'continuous' || legend.type === 'gradient') {
+            html += '<h6 class="mb-2">Légende par classes :</h6>';
+            legend.items.forEach(it => {
+                html += `
+                    <div class="thematic-legend-item">
+                        <div class="thematic-color-box" style="background-color:${it.color};"></div>
+                        <span class="thematic-label">${it.label}</span>
+                    </div>`;
+            });
+            if (legend.min_value != null && legend.max_value != null) {
+                html += `<div class="mt-2"><small class="text-muted">Plage: ${Number(legend.min_value).toFixed(2)} - ${Number(legend.max_value).toFixed(2)}</small></div>`;
             }
         }
 
-        if (typeof value === 'string' && value.length > 50) {
-            return value.substring(0, 47) + '...';
-        }
-
-        return String(value);
+        content.innerHTML = html;
+        box.style.display = 'block';
     }
 
-    /**
-     * Obtient le label français pour un type d'intersection
-     * @param {string} type - Type d'intersection
-     */
-    getTypeLabel(type) {
-        const typeLabels = {
-            'intersection': 'Intersection',
-            'difference': 'Zone unique',
-            'original': 'Zone originale',
-            'filtered': 'Zone filtrée'
-        };
-
-        return typeLabels[type] || type;
+    hideThematicLegend() {
+        const box = document.getElementById('thematic-legend');
+        if (box) box.style.display = 'none';
     }
 
-    /**
-     * Ajuste la vue de la carte sur une couche
-     * @param {string} mapId - ID de la carte
-     * @param {string} layerName - Nom de la couche
-     */
-    fitToLayer(mapId, layerName) {
-        const map = this.maps.get(mapId);
-        const mapLayers = this.layers.get(mapId);
-        
-        if (!map || !mapLayers) return;
+    showStatus(kind, msg, spin=false) {
+        const div = document.getElementById('thematic-generation-status');
+        if (!div) return;
+        const icon = spin ? 'fas fa-spinner fa-spin' :
+            (kind==='success' ? 'fas fa-check-circle' :
+            kind==='warning' ? 'fas fa-exclamation-triangle' :
+            kind==='danger'  ? 'fas fa-exclamation-triangle' : 'fas fa-info-circle');
 
-        const layer = mapLayers.get(layerName);
-        if (layer) {
-            map.fitBounds(layer.getBounds(), { padding: [20, 20] });
-        }
+        div.innerHTML = `<div class="alert alert-${kind} mb-0"><i class="${icon} me-2"></i>${msg}</div>`;
+        div.style.display = 'block';
+        if (kind === 'success') setTimeout(()=>{ div.style.display='none'; }, 4000);
     }
 
-    /**
-     * Ajuste la vue de la carte sur toutes les couches
-     * @param {string} mapId - ID de la carte
-     */
+    hideStatus(){ const d=document.getElementById('thematic-generation-status'); if(d) d.style.display='none'; }
+
+    injectExportButton(fieldName, paletteName) {
+        const statusDiv = document.getElementById('thematic-generation-status');
+        const alert = statusDiv?.querySelector('.alert.alert-success');
+        if (!alert) return;
+
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-sm btn-outline-success ms-2';
+        btn.innerHTML = '<i class="fas fa-download me-1"></i>Exporter';
+        btn.onclick = () => this.exportThematicMap(fieldName, paletteName);
+        alert.appendChild(btn);
+    }
+
+    exportThematicMap(fieldName, paletteName) {
+        fetch(`/api/export-thematic-map/${encodeURIComponent(fieldName)}?palette=${encodeURIComponent(paletteName)}`)
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) throw new Error(data.error || 'Export échoué');
+                const a = document.createElement('a');
+                a.href = data.download_url;
+                a.download = data.filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                this.showStatus('success', `Fichier exporté: ${data.filename}`);
+            })
+            .catch(err => this.showStatus('danger', `Erreur export: ${err.message}`));
+    }
+
     fitToAllLayers(mapId) {
         const map = this.maps.get(mapId);
         const mapLayers = this.layers.get(mapId);
-        
         if (!map || !mapLayers) return;
 
         const group = new L.featureGroup();
-        mapLayers.forEach(layer => {
-            group.addLayer(layer);
-        });
-
-        if (group.getLayers().length > 0) {
-            map.fitBounds(group.getBounds(), { padding: [20, 20] });
-        }
+        mapLayers.forEach(layer => layer && group.addLayer(layer));
+        if (group.getLayers().length) map.fitBounds(group.getBounds(), { padding: [20, 20] });
     }
 
-    /**
-     * Supprime une couche de la carte
-     * @param {string} mapId - ID de la carte
-     * @param {string} layerName - Nom de la couche
-     */
-    removeLayer(mapId, layerName) {
-        const map = this.maps.get(mapId);
-        const mapLayers = this.layers.get(mapId);
-        
-        if (!map || !mapLayers) return;
-
-        const layer = mapLayers.get(layerName);
-        if (layer) {
-            map.removeLayer(layer);
-            mapLayers.delete(layerName);
-        }
-    }
-
-    /**
-     * Efface toutes les couches d'une carte
-     * @param {string} mapId - ID de la carte
-     */
     clearLayers(mapId) {
         const map = this.maps.get(mapId);
         const mapLayers = this.layers.get(mapId);
-        
         if (!map || !mapLayers) return;
-
-        mapLayers.forEach((layer, name) => {
-            map.removeLayer(layer);
-        });
+        mapLayers.forEach(layer => map.removeLayer(layer));
         mapLayers.clear();
-    }
-
-    /**
-     * Ajoute une légende à la carte
-     * @param {string} mapId - ID de la carte
-     * @param {Object} legendData - Données de la légende
-     * @param {string} position - Position de la légende
-     */
-    addLegend(mapId, legendData, position = 'bottomleft') {
-        const map = this.maps.get(mapId);
-        if (!map) return;
-
-        // Supprimer l'ancienne légende si elle existe
-        const existingLegend = this.controls.get(`${mapId}_legend`);
-        if (existingLegend) {
-            map.removeControl(existingLegend);
-        }
-
-        // Créer la nouvelle légende
-        const legend = L.control({ position });
-        
-        legend.onAdd = function() {
-            const div = L.DomUtil.create('div', 'map-legend');
-            div.innerHTML = '<h6 class="mb-2">Légende</h6>';
-
-            for (const [type, data] of Object.entries(legendData)) {
-                div.innerHTML += `
-                    <div class="legend-item">
-                        <div class="legend-color" style="background-color: ${data.color}"></div>
-                        <span>${data.label} (${data.count})</span>
-                    </div>
-                `;
-            }
-
-            return div;
-        };
-
-        legend.addTo(map);
-        this.controls.set(`${mapId}_legend`, legend);
-
-        return legend;
-    }
-
-    /**
-     * Ajoute des contrôles personnalisés à la carte
-     * @param {string} mapId - ID de la carte
-     * @param {Array} controls - Liste des contrôles à ajouter
-     */
-    addCustomControls(mapId, controls = []) {
-        const map = this.maps.get(mapId);
-        if (!map) return;
-
-        controls.forEach(controlConfig => {
-            const control = L.control({ position: controlConfig.position || 'topright' });
-            
-            control.onAdd = function() {
-                const div = L.DomUtil.create('div', 'leaflet-control-custom');
-                div.innerHTML = controlConfig.html;
-                
-                if (controlConfig.onClick) {
-                    div.addEventListener('click', controlConfig.onClick);
-                }
-
-                return div;
-            };
-
-            control.addTo(map);
-            
-            if (controlConfig.name) {
-                this.controls.set(`${mapId}_${controlConfig.name}`, control);
-            }
-        });
-    }
-
-    /**
-     * Met à jour le style d'une couche
-     * @param {string} mapId - ID de la carte
-     * @param {string} layerName - Nom de la couche
-     * @param {Function|Object} newStyle - Nouveau style
-     */
-    updateLayerStyle(mapId, layerName, newStyle) {
-        const mapLayers = this.layers.get(mapId);
-        if (!mapLayers) return;
-
-        const layer = mapLayers.get(layerName);
-        if (layer) {
-            layer.setStyle(newStyle);
-        }
-    }
-
-    /**
-     * Filtre une couche selon des critères
-     * @param {string} mapId - ID de la carte
-     * @param {string} layerName - Nom de la couche
-     * @param {Function} filterFunction - Fonction de filtrage
-     */
-    filterLayer(mapId, layerName, filterFunction) {
-        const map = this.maps.get(mapId);
-        const mapLayers = this.layers.get(mapId);
-        
-        if (!map || !mapLayers) return;
-
-        const layer = mapLayers.get(layerName);
-        if (layer) {
-            layer.eachLayer(function(featureLayer) {
-                const feature = featureLayer.feature;
-                if (filterFunction(feature)) {
-                    featureLayer.setStyle({ opacity: 1, fillOpacity: 0.6 });
-                } else {
-                    featureLayer.setStyle({ opacity: 0.3, fillOpacity: 0.1 });
-                }
-            });
-        }
-    }
-
-    /**
-     * Exporte la carte en image
-     * @param {string} mapId - ID de la carte
-     * @param {Object} options - Options d'export
-     */
-    exportMapAsImage(mapId, options = {}) {
-        const map = this.maps.get(mapId);
-        if (!map) return;
-
-        // Cette fonctionnalité nécessite une librairie supplémentaire comme leaflet-image
-        console.log('Export d\'image non implémenté - nécessite leaflet-image');
-    }
-
-    /**
-     * Obtient les limites géographiques de toutes les couches
-     * @param {string} mapId - ID de la carte
-     */
-    getAllLayersBounds(mapId) {
-        const mapLayers = this.layers.get(mapId);
-        if (!mapLayers) return null;
-
-        const group = new L.featureGroup();
-        mapLayers.forEach(layer => {
-            group.addLayer(layer);
-        });
-
-        return group.getLayers().length > 0 ? group.getBounds() : null;
+        this.thematicLayer = null;
+        this.hideThematicLegend();
+        this.hideStatus();
+        this.currentThematicField = null;
     }
 }
 
-// ============================================================================
-// Gestionnaire d'événements et utilitaires
-// ============================================================================
-
-/**
- * Gestionnaire d'événements pour l'application ZADA
- */
-class ZADAEventManager {
-    constructor(mapManager) {
-        this.mapManager = mapManager;
-        this.setupGlobalEventListeners();
-    }
-
-    /**
-     * Configure les écouteurs d'événements globaux
-     */
-    setupGlobalEventListeners() {
-        // Gestion du redimensionnement
-        window.addEventListener('resize', this.handleWindowResize.bind(this));
-        
-        // Gestion des raccourcis clavier
-        document.addEventListener('keydown', this.handleKeyboardShortcuts.bind(this));
-        
-        // Gestion du drag & drop pour les fichiers
-        this.setupDragAndDrop();
-    }
-
-    /**
-     * Gère le redimensionnement de la fenêtre
-     */
-    handleWindowResize() {
-        // Invalider la taille de toutes les cartes
-        this.mapManager.maps.forEach((map, mapId) => {
-            setTimeout(() => {
-                map.invalidateSize();
-            }, 100);
-        });
-    }
-
-    /**
-     * Gère les raccourcis clavier
-     * @param {KeyboardEvent} event - Événement clavier
-     */
-    handleKeyboardShortcuts(event) {
-        // Échapper pour fermer les popups
-        if (event.key === 'Escape') {
-            this.mapManager.maps.forEach(map => {
-                map.closePopup();
-            });
-        }
-
-        // Ctrl+R pour réinitialiser la vue
-        if (event.ctrlKey && event.key === 'r') {
-            event.preventDefault();
-            const activeMapId = this.getActiveMapId();
-            if (activeMapId) {
-                this.mapManager.fitToAllLayers(activeMapId);
-            }
-        }
-    }
-
-    /**
-     * Configure le drag & drop pour les fichiers
-     */
-    setupDragAndDrop() {
-        const uploadAreas = document.querySelectorAll('.upload-area, .card-body');
-        
-        uploadAreas.forEach(area => {
-            area.addEventListener('dragover', this.handleDragOver.bind(this));
-            area.addEventListener('dragleave', this.handleDragLeave.bind(this));
-            area.addEventListener('drop', this.handleFileDrop.bind(this));
-        });
-    }
-
-    /**
-     * Gère l'événement dragover
-     * @param {DragEvent} event - Événement de drag
-     */
-    handleDragOver(event) {
-        event.preventDefault();
-        event.currentTarget.classList.add('dragover');
-    }
-
-    /**
-     * Gère l'événement dragleave
-     * @param {DragEvent} event - Événement de drag
-     */
-    handleDragLeave(event) {
-        event.preventDefault();
-        event.currentTarget.classList.remove('dragover');
-    }
-
-    /**
-     * Gère le drop de fichiers
-     * @param {DragEvent} event - Événement de drop
-     */
-    handleFileDrop(event) {
-        event.preventDefault();
-        event.currentTarget.classList.remove('dragover');
-        
-        const files = Array.from(event.dataTransfer.files);
-        const validFiles = files.filter(file => 
-            file.name.toLowerCase().endsWith('.shp') || 
-            file.name.toLowerCase().endsWith('.geojson') ||
-            file.name.toLowerCase().endsWith('.zip')
-        );
-
-        if (validFiles.length > 0) {
-            console.log('Fichiers déposés:', validFiles.map(f => f.name));
-            // Ici on pourrait déclencher l'upload automatique
-            this.showNotification('Fichiers détectés', `${validFiles.length} fichier(s) prêt(s) à être traité(s)`, 'info');
-        } else {
-            this.showNotification('Fichiers non supportés', 'Seuls les fichiers .shp, .geojson et .zip sont acceptés', 'warning');
-        }
-    }
-
-    /**
-     * Obtient l'ID de la carte active
-     */
-    getActiveMapId() {
-        // Simple heuristique basée sur la page courante
-        if (document.getElementById('map')) return 'map';
-        if (document.getElementById('nlpMap')) return 'nlpMap';
-        return null;
-    }
-
-    /**
-     * Affiche une notification
-     * @param {string} title - Titre de la notification
-     * @param {string} message - Message de la notification
-     * @param {string} type - Type de notification (success, warning, error, info)
-     */
-    showNotification(title, message, type = 'info') {
-        // Créer une notification toast Bootstrap
-        const toastContainer = this.getOrCreateToastContainer();
-        
-        const toast = document.createElement('div');
-        toast.className = `toast align-items-center text-white bg-${type === 'error' ? 'danger' : type} border-0`;
-        toast.setAttribute('role', 'alert');
-        toast.setAttribute('aria-live', 'assertive');
-        toast.setAttribute('aria-atomic', 'true');
-
-        toast.innerHTML = `
-            <div class="d-flex">
-                <div class="toast-body">
-                    <strong>${title}</strong><br>
-                    ${message}
-                </div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-            </div>
-        `;
-
-        toastContainer.appendChild(toast);
-
-        // Initialiser et afficher le toast
-        const bsToast = new bootstrap.Toast(toast, {
-            autohide: true,
-            delay: 5000
-        });
-        
-        bsToast.show();
-
-        // Nettoyer après fermeture
-        toast.addEventListener('hidden.bs.toast', () => {
-            toast.remove();
-        });
-    }
-
-    /**
-     * Obtient ou crée le conteneur de toasts
-     */
-    getOrCreateToastContainer() {
-        let container = document.getElementById('toast-container');
-        
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'toast-container';
-            container.className = 'toast-container position-fixed bottom-0 end-0 p-3';
-            container.style.zIndex = '9999';
-            document.body.appendChild(container);
-        }
-
-        return container;
-    }
+// ------------------------ Styles intégrés minimes ------------------------
+function addThematicStyles() {
+    if (document.getElementById('thematic-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'thematic-styles';
+    style.textContent = `
+    .thematic-legend-item{display:flex;align-items:center;margin-bottom:8px;padding:4px 8px;border-radius:4px;background:#f8f9fa;cursor:pointer}
+    .thematic-legend-item:hover{background:#e9ecef;transform:translateX(2px)}
+    .thematic-color-box{width:20px;height:20px;border-radius:3px;margin-right:10px;border:1px solid #dee2e6;flex-shrink:0}
+    .thematic-label{font-size:.9em;font-weight:500}
+    .thematic-count{margin-left:auto;font-size:.8em;color:#6c757d;background:#e9ecef;padding:2px 6px;border-radius:10px}
+    .field-preview-stat{display:inline-block;background:#e3f2fd;padding:4px 8px;margin:2px 4px;border-radius:12px;font-size:.85em;border:1px solid #bbdefb}
+    .thematic-popup{max-width:300px}
+    .thematic-popup .table td{padding:.25rem;border:none}
+    .thematic-popup .table td:first-child{width:40%;color:#6c757d}
+    `;
+    document.head.appendChild(style);
 }
 
-// ============================================================================
-// Utilitaires pour les données géographiques
-// ============================================================================
-
-/**
- * Utilitaires pour manipuler les données géographiques
- */
-class ZADAGeoUtils {
-    /**
-     * Calcule la superficie d'une feature en mètres carrés
-     * @param {Object} feature - Feature GeoJSON
-     */
-    static calculateArea(feature) {
-        if (!feature.geometry) return 0;
-        
-        // Utiliser la librairie turf.js si disponible, sinon approximation simple
-        if (typeof turf !== 'undefined' && turf.area) {
-            return turf.area(feature);
-        }
-        
-        // Approximation simple pour les polygones
-        if (feature.geometry.type === 'Polygon') {
-            const coords = feature.geometry.coordinates[0];
-            return this.polygonArea(coords);
-        }
-        
-        return 0;
-    }
-
-    /**
-     * Calcule approximativement l'aire d'un polygone
-     * @param {Array} coords - Coordonnées du polygone
-     */
-    static polygonArea(coords) {
-        let area = 0;
-        const n = coords.length;
-        
-        for (let i = 0; i < n - 1; i++) {
-            area += coords[i][0] * coords[i + 1][1];
-            area -= coords[i + 1][0] * coords[i][1];
-        }
-        
-        return Math.abs(area) / 2;
-    }
-
-    /**
-     * Calcule le centroïde d'une feature
-     * @param {Object} feature - Feature GeoJSON
-     */
-    static getCentroid(feature) {
-        if (!feature.geometry) return null;
-        
-        if (typeof turf !== 'undefined' && turf.centroid) {
-            const centroid = turf.centroid(feature);
-            return centroid.geometry.coordinates;
-        }
-        
-        // Approximation simple
-        if (feature.geometry.type === 'Polygon') {
-            const coords = feature.geometry.coordinates[0];
-            const centroid = this.polygonCentroid(coords);
-            return [centroid.lng, centroid.lat];
-        }
-        
-        return null;
-    }
-
-    /**
-     * Calcule le centroïde d'un polygone
-     * @param {Array} coords - Coordonnées du polygone
-     */
-    static polygonCentroid(coords) {
-        let x = 0, y = 0;
-        const n = coords.length - 1; // Exclure le point de fermeture
-        
-        for (let i = 0; i < n; i++) {
-            x += coords[i][0];
-            y += coords[i][1];
-        }
-        
-        return { lng: x / n, lat: y / n };
-    }
-
-    /**
-     * Convertit des coordonnées en format lisible
-     * @param {Array} coordinates - [longitude, latitude]
-     */
-    static formatCoordinates(coordinates) {
-        if (!coordinates || coordinates.length < 2) return 'N/A';
-        
-        const lng = coordinates[0].toFixed(6);
-        const lat = coordinates[1].toFixed(6);
-        
-        return `${lat}°N, ${lng}°E`;
-    }
-
-    /**
-     * Vérifie si deux features se chevauchent
-     * @param {Object} feature1 - Première feature
-     * @param {Object} feature2 - Deuxième feature
-     */
-    static featuresOverlap(feature1, feature2) {
-        if (typeof turf !== 'undefined' && turf.intersect) {
-            const intersection = turf.intersect(feature1, feature2);
-            return intersection !== null;
-        }
-        
-        // Fallback simple: vérifier si les bounding boxes se chevauchent
-        const bbox1 = this.getBoundingBox(feature1);
-        const bbox2 = this.getBoundingBox(feature2);
-        
-        return this.boundingBoxesOverlap(bbox1, bbox2);
-    }
-
-    /**
-     * Obtient la bounding box d'une feature
-     * @param {Object} feature - Feature GeoJSON
-     */
-    static getBoundingBox(feature) {
-        if (typeof turf !== 'undefined' && turf.bbox) {
-            return turf.bbox(feature);
-        }
-        
-        // Implementation simple
-        const coords = this.getAllCoordinates(feature.geometry);
-        if (coords.length === 0) return null;
-        
-        let minLng = coords[0][0], maxLng = coords[0][0];
-        let minLat = coords[0][1], maxLat = coords[0][1];
-        
-        coords.forEach(coord => {
-            minLng = Math.min(minLng, coord[0]);
-            maxLng = Math.max(maxLng, coord[0]);
-            minLat = Math.min(minLat, coord[1]);
-            maxLat = Math.max(maxLat, coord[1]);
-        });
-        
-        return [minLng, minLat, maxLng, maxLat];
-    }
-
-    /**
-     * Extrait toutes les coordonnées d'une géométrie
-     * @param {Object} geometry - Géométrie GeoJSON
-     */
-    static getAllCoordinates(geometry) {
-        const coords = [];
-        
-        function extractCoords(geom) {
-            switch (geom.type) {
-                case 'Point':
-                    coords.push(geom.coordinates);
-                    break;
-                case 'LineString':
-                case 'MultiPoint':
-                    geom.coordinates.forEach(coord => coords.push(coord));
-                    break;
-                case 'Polygon':
-                case 'MultiLineString':
-                    geom.coordinates.forEach(ring => {
-                        ring.forEach(coord => coords.push(coord));
-                    });
-                    break;
-                case 'MultiPolygon':
-                    geom.coordinates.forEach(polygon => {
-                        polygon.forEach(ring => {
-                            ring.forEach(coord => coords.push(coord));
-                        });
-                    });
-                    break;
-                case 'GeometryCollection':
-                    geom.geometries.forEach(extractCoords);
-                    break;
-            }
-        }
-        
-        extractCoords(geometry);
-        return coords;
-    }
-
-    /**
-     * Vérifie si deux bounding boxes se chevauchent
-     * @param {Array} bbox1 - Première bounding box [minLng, minLat, maxLng, maxLat]
-     * @param {Array} bbox2 - Deuxième bounding box
-     */
-    static boundingBoxesOverlap(bbox1, bbox2) {
-        if (!bbox1 || !bbox2) return false;
-        
-        return !(bbox1[2] < bbox2[0] || // bbox1 à gauche de bbox2
-                bbox1[0] > bbox2[2] || // bbox1 à droite de bbox2
-                bbox1[3] < bbox2[1] || // bbox1 au-dessus de bbox2
-                bbox1[1] > bbox2[3]);  // bbox1 en-dessous de bbox2
-    }
-}
-
-// ============================================================================
-// Initialisation globale
-// ============================================================================
-
-// Variables globales
+// ------------------------ Initialisation page ------------------------
 let zadaMapManager;
-let zadaEventManager;
 
-// Initialisation au chargement du DOM
-document.addEventListener('DOMContentLoaded', function() {
-    // Créer les gestionnaires globaux
-    zadaMapManager = new ZADAMapManager();
-    zadaEventManager = new ZADAEventManager(zadaMapManager);
-    
-    // Initialiser les cartes présentes sur la page
-    initializePageMaps();
-    
-    // Configuration globale de Leaflet
-    configureLeafletGlobals();
-});
+document.addEventListener('DOMContentLoaded', () => {
+    addThematicStyles();
 
-/**
- * Initialise les cartes présentes sur la page courante
- */
-function initializePageMaps() {
-    // Carte de fusion SIG
-    const mapElement = document.getElementById('map');
-    if (mapElement) {
-        const fusionMap = zadaMapManager.initializeMap('map');
-        
-        // Ajouter les contrôles personnalisés
-        zadaMapManager.addCustomControls('map', [
-            {
-                name: 'reset',
-                position: 'topright',
-                html: '<button class="map-control-btn" title="Réinitialiser la vue"><i class="fas fa-home"></i></button>',
-                onClick: () => zadaMapManager.fitToAllLayers('map')
-            },
-            {
-                name: 'fullscreen',
-                position: 'topright', 
-                html: '<button class="map-control-btn" title="Plein écran"><i class="fas fa-expand"></i></button>',
-                onClick: () => toggleMapFullscreen('map')
-            }
-        ]);
-    }
-    
-    // Carte NLP
-    const nlpMapElement = document.getElementById('nlpMap');
-    if (nlpMapElement) {
-        const nlpMap = zadaMapManager.initializeMap('nlpMap');
-        
-        // Ajouter les contrôles pour la carte NLP
-        zadaMapManager.addCustomControls('nlpMap', [
-            {
-                name: 'reset',
-                position: 'topright',
-                html: '<button class="map-control-btn" title="Réinitialiser la vue"><i class="fas fa-home"></i></button>',
-                onClick: () => zadaMapManager.fitToAllLayers('nlpMap')
-            }
-        ]);
-    }
-}
-
-/**
- * Configure les paramètres globaux de Leaflet
- */
-function configureLeafletGlobals() {
-    // Configuration des icônes par défaut
+    // Config icônes Leaflet
     delete L.Icon.Default.prototype._getIconUrl;
     L.Icon.Default.mergeOptions({
         iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
         iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
         shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
     });
-}
 
-/**
- * Bascule le mode plein écran pour une carte
- * @param {string} mapId - ID de la carte
- */
-function toggleMapFullscreen(mapId) {
-    const mapContainer = document.getElementById(mapId).parentElement;
-    
-    if (!document.fullscreenElement) {
-        mapContainer.requestFullscreen().then(() => {
-            // Redimensionner la carte après l'entrée en plein écran
-            setTimeout(() => {
-                const map = zadaMapManager.maps.get(mapId);
-                if (map) {
-                    map.invalidateSize();
-                }
-            }, 100);
+    zadaMapManager = new ZADAMapManager();
+
+    if (document.getElementById('map')) {
+        zadaMapManager.initializeMap('map');
+
+        // Contrôles simples
+        const resetBtn = document.getElementById('resetViewBtn');
+        if (resetBtn) resetBtn.addEventListener('click', () => zadaMapManager.fitToAllLayers('map'));
+
+        const toggleLegendBtn = document.getElementById('toggleLegendBtn');
+        if (toggleLegendBtn) toggleLegendBtn.addEventListener('click', () => {
+            const box = document.getElementById('thematic-legend');
+            if (box) box.style.display = (box.style.display === 'none' ? 'block' : 'none');
         });
-    } else {
-        document.exitFullscreen();
     }
-}
 
-// Exporter les classes et fonctions principales pour utilisation globale
-window.ZADAMapManager = ZADAMapManager;
-window.ZADAEventManager = ZADAEventManager;
-window.ZADAGeoUtils = ZADAGeoUtils;
-window.zadaMapManager = zadaMapManager;
-window.zadaEventManager = zadaEventManager;
+    // Activer la carto thématique si la section existe (page fusion_sig)
+    if (document.getElementById('thematic-mapping-section')) {
+        zadaMapManager.initializeThematicMapping();
+    }
+
+    // Raccourcis
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'r') {
+            e.preventDefault();
+            zadaMapManager.fitToAllLayers('map');
+        }
+        if (e.key === 'Escape') {
+            const map = zadaMapManager?.maps.get('map');
+            if (map) map.closePopup();
+        }
+    });
+});
+
+// Expose minimal utils si besoin
+window.zadaMapManager = () => zadaMapManager;

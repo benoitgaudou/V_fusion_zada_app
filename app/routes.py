@@ -1,306 +1,425 @@
-from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, session
-from werkzeug.utils import secure_filename
-import json
+# app/routes.py
+from __future__ import annotations
+
+from flask import Blueprint, render_template, request, flash, redirect, url_for, jsonify, session, current_app, send_file
 from pathlib import Path
+from typing import Iterable, List
+import re
+import unicodedata
+import geopandas as gpd
+import pandas as pd
 import logging
 import traceback
+import json
+import io
+import datetime as dt
 
 from app.forms import FileUploadForm, FusionSIGForm, NLPQueryForm
-from app.modules.file_loader import FileLoader
-from app.modules.zada_fusion import ZADAFusionEngine
-from app.modules.map_generator import MapDataGenerator
-from app.modules.exceptions import ZADAException
+from app.modules.file_loader import FileLoader, FileLoaderConfig
+from app.modules.zada_fusion import ZadaMerger, MergeConfig
+from app.modules.map_generator import MapDataGenerator  # version simplifiée: generate_thematic_geojson + get_map_bounds
+from app.modules.exceptions import ZADAException, FileLoadingError
 
 main_bp = Blueprint('main', __name__)
 logger = logging.getLogger(__name__)
 
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
 
-# Ajoutez ces routes AU DÉBUT de votre fichier app/routes.py
-# (avant @main_bp.route('/process_fusion', methods=['POST']))
+def _get_paths():
+    uploads = Path(current_app.config["UPLOAD_FOLDER"])
+    stage   = Path(current_app.config["STAGE_FOLDER"])
+    results = Path(current_app.config["RESULTS_FOLDER"])
+    for p in (uploads, stage, results):
+        p.mkdir(parents=True, exist_ok=True)
+    return uploads, stage, results
 
+def _get_loader() -> FileLoader:
+    uploads, _, _ = _get_paths()
+    cfg = FileLoaderConfig(
+        upload_folder=uploads,
+        force_output_crs=current_app.config["DEFAULT_CRS"],
+        assume_input_crs=current_app.config["DEFAULT_CRS"],
+        max_features_debug=None,
+        allow_network_proj=bool(current_app.config.get("PROJ_NETWORK", False)),
+        keep_extracted=False,
+    )
+    return FileLoader(cfg)
+
+def _get_merger(area_threshold: float | None = None) -> ZadaMerger:
+    at = float(
+        area_threshold
+        if area_threshold is not None
+        else session.get("area_threshold", current_app.config["DEFAULT_AREA_THRESHOLD"])
+    )
+    mcfg = MergeConfig(
+        area_threshold_m2=at,
+        input_crs_fallback=current_app.config["DEFAULT_CRS"],
+        output_crs=current_app.config["DEFAULT_CRS"],
+        metric_crs=current_app.config["METRIC_CRS"],
+        sample_unique_values=10,
+        similarity_threshold=0.30,
+    )
+    return ZadaMerger(mcfg)
+
+
+#
+def _non_tech_columns(
+    gdf: gpd.GeoDataFrame,
+    excluded_exact: Iterable[str] = (
+        "geometry", "Original_source_id", "Original_source_name",
+        "intersection_type", "type", "sources", "source_names", "id"
+    ),
+    excluded_patterns: Iterable[str] = ()
+) -> List[str]:
+    """
+    Retourne les colonnes 'métier' en excluant :
+      - les noms exacts (insensible à la casse)
+      - les préfixes avec '*', ex: 'nom*', 'id*', 'source_*'
+    """
+
+    def norm(s: str) -> str:
+        # normalisation simple: strip + minuscules + sans accents
+        s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+        return s.strip().lower()
+
+    # géométrie réelle (peut ne pas s'appeler 'geometry')
+    try:
+        geom_col = gdf.geometry.name
+    except Exception:
+        geom_col = "geometry"
+
+    # 1) Set pour exclusions exactes (normalisées)
+    exact = {norm(x) for x in set(excluded_exact) | {geom_col}}
+
+    # 2) Préfixes à exclure (soit donnés via excluded_patterns, soit tu peux
+    #    décider d'interpréter AUSSI certains exacts comme préfixes)
+    #    On accepte des motifs avec étoile finale 'xxx*'
+    prefixes = []
+    for pat in excluded_patterns:
+        p = norm(pat)
+        if p.endswith("*"):
+            prefixes.append(p[:-1])  # retire l’étoile -> vrai préfixe
+        else:
+            # si l’utilisateur met un motif sans '*', on le traite comme exact
+            exact.add(p)
+
+    def is_excluded(col: str) -> bool:
+        c = norm(col)
+        if c in exact:
+            return True
+        return any(c.startswith(pfx) for pfx in prefixes if pfx)
+
+    # retourne seulement les colonnes non exclues (ordre préservé)
+    return [c for c in gdf.columns if not is_excluded(c)]
+
+
+# -------------------------------------------------------------------
+# Accueil
+# -------------------------------------------------------------------
 @main_bp.route('/')
 def home():
     """Page d'accueil avec formulaire de chargement"""
     form = FileUploadForm()
-    
-    # Récupérer la liste des fichiers chargés depuis la session
     loaded_files = session.get('loaded_files', [])
-    
     return render_template('home.html', form=form, loaded_files=loaded_files)
 
+# -------------------------------------------------------------------
+# Upload + staging
+# -------------------------------------------------------------------
 @main_bp.route('/upload', methods=['POST'])
 def upload_files():
-    """Traitement du chargement de fichiers"""
+    """
+    1) Charge les fichiers
+    2) Écrit des GeoJSON en stage
+    3) Lance la fusion backend immédiatement
+    4) Stocke le résultat + métadonnées en session
+    5) Redirige vers /fusion_sig (page 2) pour choisir un champ et générer la carte
+    """
     form = FileUploadForm()
-    
-    if form.validate_on_submit():
-        try:
-            # Initialiser le loader
-            from flask import current_app
-            loader = FileLoader(current_app.config['UPLOAD_FOLDER'])
-            
-            # Extraire et sauvegarder les fichiers
-            uploaded_files = request.files.getlist('files')
-            if not uploaded_files:
-                flash("Aucun fichier sélectionné", "error")
-                return redirect(url_for('main.home'))
-            
-            geodataframes = loader.process_uploaded_files(uploaded_files)
-            
-
-            if not geodataframes:
-                flash("Aucun fichier géospatial valide détecté", "error")
-                return redirect(url_for('main.home'))
-            
-            # Sauvegarder les informations en session
-            session['loaded_files'] = [
-                {
-                    'name': name,
-                    'count': len(gdf),
-                    'columns': list(gdf.columns),
-                    'bounds': gdf.total_bounds.tolist() if not gdf.empty else []
-                }
-                for gdf, name in geodataframes
-            ]
-            
-            session['area_threshold'] = form.area_threshold.data
-            
-            flash(f"Succès ! {len(geodataframes)} fichiers chargés", "success")
-            
-            return redirect(url_for('main.fusion_sig'))
-            
-        except Exception as e:
-            logger.error(f"Erreur chargement: {e}")
-            flash(f"Erreur lors du chargement: {str(e)}", "error")
-            return redirect(url_for('main.home'))
-    
-    # Si validation échoue
-    for field, errors in form.errors.items():
-        for error in errors:
-            flash(f"{field}: {error}", "error")
-    
-    return redirect(url_for('main.home'))
-
-@main_bp.route('/fusion_sig')
-def fusion_sig():
-    """Interface de fusion par critères SIG"""
-    loaded_files = session.get('loaded_files', [])
-    
-    if not loaded_files:
-        flash("Veuillez d'abord charger des fichiers", "warning")
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            for error in errors:
+                flash(f"{field}: {error}", "error")
         return redirect(url_for('main.home'))
-    
-    form = FusionSIGForm()
-    
-    # Extraire les colonnes communes pour les critères
-    all_columns = set()
-    for file_info in loaded_files:
-        all_columns.update(file_info['columns'])
-    
-    # Exclure les colonnes techniques
-    excluded = {'geometry', 'original_source_id', 'original_source_name'}
-    criteria_columns = [(col, col.replace('_', ' ').title()) 
-                       for col in sorted(all_columns - excluded)]
-    
-    form.criterion.choices = [('', 'Sélectionner un critère...')] + criteria_columns
-    form.area_threshold.data = session.get('area_threshold', 100)
-    
+
+    try:
+        loader = _get_loader()
+        _, stage_folder, results_folder = _get_paths()
+
+        uploaded_files = request.files.getlist('files')
+        if not uploaded_files:
+            flash("Aucun fichier sélectionné", "error")
+            return redirect(url_for('main.home'))
+
+        # Charge en GeoDataFrames puis écrit des GeoJSON stage (un par source)
+        loaded = loader.process_uploaded_files(uploaded_files)  # [(gdf, stem), ...]
+        stage_paths = []
+        loaded_files_info = []
+
+        candidate_fields_intersection = None
+        for gdf, stem in loaded:
+            # écrire stage
+            stage_path = stage_folder / f"{stem}.geojson"
+            stage_path.write_text(loader.to_geojson_str(gdf), encoding="utf-8")
+            stage_paths.append(str(stage_path))
+
+            # infos pour UI
+            cols = _non_tech_columns(
+                gdf,
+                excluded_exact={ "geometry", "Original_source_id", "Original_source_name",
+                                "intersection_type", "type", "sources", "source_names", "id"},
+                excluded_patterns={"nom*", "Id*", "source_*", "Original_souurce","source_names*","intersection*", "Origin*"}
+                )
+            
+            loaded_files_info.append({
+                'name': stem,
+                'count': int(len(gdf)),
+                'columns': cols,
+                'bounds': gdf.total_bounds.tolist() if not gdf.empty else []
+            })
+
+            # champs candidats (catégoriels ou peu de modalités)
+            cat_cols = [c for c in cols if (str(gdf[c].dtype) == "object") or (gdf[c].nunique(dropna=True) <= 25)]
+            candidate_fields_intersection = (
+                set(cat_cols) if candidate_fields_intersection is None
+                else (candidate_fields_intersection & set(cat_cols))
+            )
+            
+        def _wipe_fusion_session():
+            for key in ('fusion_result_metadata', 'candidate_fields', 'loaded_files', 'stage_paths'):
+                session.pop(key, None)
+        _wipe_fusion_session()
+
+        # enregistre seuil pour merger
+        session['area_threshold'] = float(form.area_threshold.data or 100.0)
+        session['loaded_files'] = loaded_files_info
+        session['stage_paths'] = stage_paths
+        session['candidate_fields'] = sorted(candidate_fields_intersection) if candidate_fields_intersection else []
+
+        # >>> LANCE LA FUSION ICI (sans critère) <<<
+        # >>> LANCE LA FUSION ICI (sans critère) <<<
+        if len(stage_paths) < 2:
+            flash("Au moins 2 sources sont nécessaires pour fusionner.", "error")
+            return redirect(url_for('main.home'))
+
+        # Seuil à utiliser (déjà stocké juste au-dessus, on le relit par sécurité)
+        at = float(session.get('area_threshold', 100.0))
+
+        # Construire un merger prêt avec le bon seuil (ne pas modifier la config ensuite)
+        merger = _get_merger(area_threshold=at)
+
+        merger.load_sources(stage_paths)
+        result_gdf = merger.merge()
+        if result_gdf is None or result_gdf.empty:
+            flash("Fusion vide.", "error")
+            return redirect(url_for('main.home'))
+
+
+        # Sauvegarder le GeoJSON de résultat
+        out_geojson = results_folder / f"fusion_result_all.geojson"
+        result_gdf.to_file(out_geojson, driver="GeoJSON")
+
+        # Métadonnées pour la page 2
+        _wipe_fusion_session()
+        session['fusion_result_metadata'] = {
+            'export_path': str(out_geojson),
+            'available_fields': _non_tech_columns(
+                result_gdf,
+                excluded_exact={ "geometry", "Original_source_id", "Original_source_name",
+                                "intersection_type", "type", "sources", "source_names", "id"},
+                excluded_patterns={"nom*", "id*", "source*", "Original_source","source_names*","intersection*", "Origin*"}
+                ),
+            'total_features': int(len(result_gdf)),
+            'crs': str(result_gdf.crs),
+            'bounds': result_gdf.total_bounds.tolist() if not result_gdf.empty else []
+        }
+
+        flash(f"Succès ! {len(stage_paths)} fichier(s) chargé(s) et fusion réalisée.", "success")
+        return redirect(url_for('main.fusion_sig'))
+
+    except FileLoadingError as e:
+        logger.error(f"Erreur chargement: {e}")
+        flash(f"Erreur lors du chargement: {str(e)}", "error")
+        return redirect(url_for('main.home'))
+    except Exception as e:
+        logger.exception("Erreur upload/fusion inattendue")
+        flash(f"Erreur lors du chargement/fusion: {str(e)}", "error")
+        return redirect(url_for('main.home'))
+
+# -------------------------------------------------------------------
+# Page 2 : UI champs + génération de carte (pas de POST de fusion ici)
+# -------------------------------------------------------------------
+@main_bp.route('/fusion_sig', methods=["GET"])
+def fusion_sig():
+    loaded_files = session.get('loaded_files', [])
+    meta = session.get('fusion_result_metadata')
+    if not loaded_files or not meta:
+        flash("Veuillez d'abord charger des fichiers (et fusionner).", "warning")
+        return redirect(url_for('main.home'))
+
+    form = FusionSIGForm()  # on réutilise seulement le select côté front (ou rien si tu préfères)
+    # Le front va appeler /api/fields puis /api/thematic-map/<field>
     return render_template('fusion_sig.html', form=form, loaded_files=loaded_files)
 
+# -------------------------------------------------------------------
+# APIs “thématiques” pour la page 2
+# -------------------------------------------------------------------
+
+@main_bp.route('/api/fields')
+@main_bp.route('/api/fields-analysis')
+def api_fields_analysis():
+    """Retourne la liste des champs disponibles sur le résultat fusionné, avec stats."""
+    meta = session.get('fusion_result_metadata')
+    if not meta or not Path(meta.get('export_path', '')).exists():
+        return jsonify({'success': False, 'error': 'Aucun résultat de fusion disponible.'}), 400
+
+    try:
+        gdf = gpd.read_file(meta['export_path'])
+        fields = []
+        for col in _non_tech_columns(gdf):
+            s = gdf[col]
+            dtype = 'numeric' if pd.api.types.is_numeric_dtype(s) else 'categorical'
+            sample = list(s.dropna().unique()[:5])
+            fields.append({
+                'name': col,
+                'label': col.replace('_', ' ').title(),
+                'type': dtype,
+                'unique_count': int(s.nunique(dropna=True)),
+                'sample_values': sample
+            })
+        return jsonify({'success': True, 'fields': fields})
+    except Exception as e:
+        logger.exception("Erreur /api/fields-analysis")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/field-analysis/<field_name>', methods=['GET'])
+def api_field_analysis(field_name):
+    """Analyse légère d’un champ (type, uniques, stats si numérique)."""
+    meta = session.get('fusion_result_metadata')
+    if not meta:
+        return jsonify({'success': False, 'error': 'Aucun résultat de fusion en session.'}), 400
+
+    try:
+        gdf = gpd.read_file(meta['export_path'])
+        if field_name not in gdf.columns:
+            return jsonify({'success': False, 'error': f"Champ '{field_name}' introuvable"}), 404
+
+        s = gdf[field_name]
+        non_null = s.dropna()
+        is_numeric = str(non_null.dtype).startswith(('int', 'float'))
+
+        analysis = {
+            'field_name': field_name,
+            'data_type': 'numeric' if is_numeric else 'categorical',
+            'total_values': int(len(s)),
+            'unique_count': int(non_null.nunique()),
+            'null_values': int(s.isna().sum()),
+            'sample_values': list(non_null.unique()[:10])
+        }
+
+        if is_numeric and not non_null.empty:
+            analysis.update({
+                'min_value': float(non_null.min()),
+                'max_value': float(non_null.max()),
+                'mean_value': float(non_null.mean())
+            })
+
+        return jsonify({'success': True, 'analysis': analysis})
+    except Exception as e:
+        logger.error("field-analysis error: %s", e)
+        return jsonify({'success': False, 'error': 'Erreur analyse champ.'}), 500
+
+@main_bp.route('/api/thematic-map/<field_name>', methods=['GET'])
+def api_thematic_map(field_name):
+    """Génère le GeoJSON stylé + légende + bounds pour le champ demandé."""
+    palette = request.args.get('palette', 'default')
+    meta = session.get('fusion_result_metadata')
+    if not meta:
+        return jsonify({'success': False, 'error': 'Aucun résultat de fusion en session.'}), 400
+
+    try:
+        gdf = gpd.read_file(meta['export_path'])
+        if field_name not in gdf.columns:
+            return jsonify({'success': False, 'error': f"Champ '{field_name}' introuvable"}), 404
+
+        gen = MapDataGenerator()
+        res = gen.generate_thematic_geojson(gdf, field_name=field_name, palette_name=palette)
+        if not res.get('success'):
+            return jsonify({'success': False, 'error': res.get('error', 'Erreur générateur')}), 400
+
+        bounds = gen.get_map_bounds(gdf)
+        # Normalise la légende pour le front (items)
+        legend_items = []
+        if 'legend' in res and res['legend'].get('items'):
+            legend_items = res['legend']['items']
+        else:
+            # Legacy: si ta version retourne colors + counts
+            legend = res.get('legend') or {}
+            legend_items = legend.get('items', [])
+
+        return jsonify({
+            'success': True,
+            'geojson': res['geojson'],
+            'legend': {'type': res['legend'].get('type', 'discrete'), 'items': legend_items},
+            'analysis': res.get('analysis', {}),
+            'palette': res.get('palette_name', palette),
+            'bounds': bounds
+        })
+    except Exception as e:
+        logger.error("thematic-map error: %s", e)
+        return jsonify({'success': False, 'error': 'Erreur génération carte thématique.'}), 500
+
+@main_bp.route('/api/export-thematic-map/<field_name>', methods=['GET'])
+def api_export_thematic_map(field_name):
+    """Exporte le GeoJSON thématique (download)."""
+    palette = request.args.get('palette', 'default')
+    meta = session.get('fusion_result_metadata')
+    if not meta:
+        return jsonify({'success': False, 'error': 'Aucun résultat de fusion en session.'}), 400
+
+    try:
+        gdf = gpd.read_file(meta['export_path'])
+        if field_name not in gdf.columns:
+            return jsonify({'success': False, 'error': f"Champ '{field_name}' introuvable"}), 404
+
+        gen = MapDataGenerator()
+        res = gen.generate_thematic_geojson(gdf, field_name=field_name, palette_name=palette)
+        if not res.get('success'):
+            return jsonify({'success': False, 'error': res.get('error', 'Erreur générateur')}), 400
+
+        # Sérialise en mémoire et renvoie un fichier
+        buf = io.BytesIO()
+        buf.write(json.dumps(res['geojson']).encode('utf-8'))
+        buf.seek(0)
+
+        fname = f"thematic_{field_name}_{palette}_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson"
+        return send_file(buf, mimetype='application/geo+json', as_attachment=True, download_name=fname)
+    except Exception as e:
+        logger.error("export-thematic error: %s", e)
+        return jsonify({'success': False, 'error': 'Erreur export.'}), 500
+
+
+# -------------------------------------------------------------------
+# Les autres endpoints que tu avais (NLP, palettes, fields, etc.)
+# → tu peux les laisser tels quels; ils liront la session/les fichiers.
+# -------------------------------------------------------------------
 @main_bp.route('/nlp_query')
 def nlp_query():
-    """Interface de recherche sémantique NLP"""
     form = NLPQueryForm()
     return render_template('nlp_query.html', form=form)
 
-@main_bp.route('/api/map_data/<criterion>')
-def get_map_data(criterion):
-    """API pour récupérer les données cartographiques"""
-    # TODO: Implémenter récupération données selon critère
-    return jsonify({
-        'type': 'FeatureCollection',
-        'features': []
-    })
-
-@main_bp.route('/process_fusion', methods=['POST'])
-def process_fusion():
-    """Traitement complet de la fusion ZADA"""
-    form = FusionSIGForm()
-    
-    if not form.validate_on_submit():
-        return jsonify({
-            'success': False,
-            'error': 'Données de formulaire invalides'
-        }), 400
-    
-    try:
-        # Récupérer les paramètres
-        criterion = form.criterion.data
-        area_threshold = form.area_threshold.data
-        
-        # Vérifier qu'on a des fichiers chargés en session
-        loaded_files_info = session.get('loaded_files', [])
-        if not loaded_files_info:
-            return jsonify({
-                'success': False,
-                'error': 'Aucun fichier chargé. Veuillez retourner à l\'accueil.'
-            }), 400
-        
-        # Recharger les fichiers depuis le disque
-        from flask import current_app
-        loader = FileLoader(current_app.config['UPLOAD_FOLDER'])
-        
-        # Reconstituer les chemins des fichiers
-        upload_folder = Path(current_app.config['UPLOAD_FOLDER'])
-        file_paths = []
-        
-        for file_info in loaded_files_info:
-            # Chercher les fichiers correspondants
-            potential_paths = list(upload_folder.rglob(f"{file_info['name']}.*"))
-            shp_files = [p for p in potential_paths if p.suffix.lower() == '.shp']
-            geojson_files = [p for p in potential_paths if p.suffix.lower() == '.geojson']
-            
-            file_paths.extend(shp_files + geojson_files)
-        
-        if not file_paths:
-            return jsonify({
-                'success': False,
-                'error': 'Fichiers source introuvables. Veuillez les recharger.'
-            }), 400
-        
-        # Charger les GeoDataFrames
-        logger.info(f"Rechargement de {len(file_paths)} fichiers pour fusion")
-        geodataframes = loader.load_geodataframes(file_paths)
-        
-        if len(geodataframes) < 2:
-            return jsonify({
-                'success': False,
-                'error': 'Au moins 2 fichiers valides requis pour la fusion'
-            }), 400
-        
-        # Initialiser le moteur de fusion ZADA
-        fusion_engine = ZADAFusionEngine(area_threshold=area_threshold)
-        
-        # Exécuter la fusion
-        logger.info("Démarrage de la fusion ZADA...")
-        result_gdf = fusion_engine.execute_fusion(geodataframes)
-        
-        if result_gdf is None:
-            return jsonify({
-                'success': False,
-                'error': 'Échec de la fusion ZADA'
-            }), 500
-        
-        # Appliquer le filtrage par critère si spécifié
-        if criterion and criterion in result_gdf.columns:
-            logger.info(f"Application du critère de filtrage: {criterion}")
-            filtered_gdf = fusion_engine.filter_by_criterion(result_gdf, criterion)
-        else:
-            filtered_gdf = result_gdf
-        
-        # Générer les données cartographiques
-        map_generator = MapDataGenerator()
-        
-        # Convertir en GeoJSON pour Leaflet
-        map_data = map_generator.gdf_to_leaflet_geojson(
-            filtered_gdf,
-            properties_to_include=[
-                'intersection_type', 'source_names', 'original_source_name',
-                criterion if criterion else None
-            ]
-        )
-        
-        # Générer la légende
-        legend_data = map_generator.generate_legend_data(filtered_gdf)
-        
-        # Calculer les limites géographiques
-        map_bounds = map_generator.get_map_bounds(filtered_gdf)
-        
-        # Obtenir les statistiques
-        stats = fusion_engine.get_fusion_statistics()
-        
-        # Sauvegarder le résultat
-        results_folder = Path(current_app.config['RESULTS_FOLDER'])
-        output_path = results_folder / f"fusion_result_{criterion or 'all'}.geojson"
-        
-        success_export = fusion_engine.export_to_geojson(filtered_gdf, output_path)
-        
-        # Préparer la réponse
-        response_data = {
-            'success': True,
-            'message': f'Fusion réussie selon le critère: {criterion or "tous"}',
-            'statistics': {
-                'total_features': stats.get('total_features', 0),
-                'intersections': stats.get('intersections', 0),
-                'differences': stats.get('differences', 0),
-                'originals': stats.get('originals', 0),
-                'area_threshold': stats.get('area_threshold', area_threshold),
-                'criterion_applied': criterion,
-                'exported': success_export
-            },
-            'map_data': map_data,
-            'legend_data': legend_data,
-            'map_bounds': map_bounds,
-            'export_path': str(output_path) if success_export else None
-        }
-        
-        # Sauvegarder les résultats en session pour usage ultérieur
-        session['last_fusion_result'] = {
-            'criterion': criterion,
-            'statistics': response_data['statistics'],
-            'export_path': str(output_path) if success_export else None
-        }
-        
-        logger.info(f"Fusion ZADA terminée avec succès: {stats.get('total_features', 0)} entités")
-        
-        return jsonify(response_data)
-        
-    except ZADAException as e:
-        logger.error(f"Erreur ZADA: {e}")
-        return jsonify({
-            'success': False,
-            'error': f'Erreur lors de la fusion: {str(e)}'
-        }), 500
-        
-    except Exception as e:
-        logger.error(f"Erreur inattendue lors de la fusion: {e}")
-        logger.error(traceback.format_exc())
-        return jsonify({
-            'success': False,
-            'error': 'Erreur interne du serveur'
-        }), 500
-
 @main_bp.route('/api/download_result/<path:filename>')
 def download_result(filename):
-    """Téléchargement des résultats de fusion"""
     try:
-        from flask import current_app, send_file
-        results_folder = Path(current_app.config['RESULTS_FOLDER'])
+        results_folder = Path(current_app.config.get('RESULTS_FOLDER', 'out'))
         file_path = results_folder / filename
-        
         if not file_path.exists():
             return jsonify({'error': 'Fichier non trouvé'}), 404
-        
+        from flask import send_file
         return send_file(file_path, as_attachment=True)
-        
     except Exception as e:
         logger.error(f"Erreur téléchargement: {e}")
         return jsonify({'error': 'Erreur lors du téléchargement'}), 500
-
-@main_bp.route('/api/fusion_status')
-def fusion_status():
-    """Status de la dernière fusion"""
-    last_result = session.get('last_fusion_result')
-    
-    if not last_result:
-        return jsonify({
-            'has_result': False,
-            'message': 'Aucune fusion récente'
-        })
-    
-    return jsonify({
-        'has_result': True,
-        'criterion': last_result.get('criterion'),
-        'statistics': last_result.get('statistics'),
-        'export_path': last_result.get('export_path')
-    })

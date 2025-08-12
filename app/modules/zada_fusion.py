@@ -1,473 +1,426 @@
-# ============================================================================
-# app/modules/zada_fusion.py - Moteur de fusion ZADA
-# ============================================================================
+# zada_merger.py
+from __future__ import annotations
+
+import logging
+import warnings
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, List, Optional, Sequence, Tuple, Dict, Any
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Polygon, MultiPolygon, GeometryCollection
+from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, base as shapely_base
 from shapely.ops import unary_union
-from pathlib import Path
-from tqdm import tqdm
-from typing import List, Tuple, Dict, Optional
-import logging
 
-from .geometry_utils import GeometryProcessor
-from .column_analyzer import ColumnAnalyzer
-from .exceptions import FusionError, GeometryProcessingError
-
+# --- Configuration logging minimale (modifie le niveau dans ton script principal) ---
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "[%(levelname)s] %(asctime)s - %(name)s: %(message)s", "%H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
-class ZADAFusionEngine:
+warnings.filterwarnings("ignore")
+
+
+@dataclass(frozen=True)
+class MergeConfig:
     """
-    Moteur de fusion ZADA amélioré pour l'intégration Flask
-    
-    Ce moteur implémente l'algorithme de fusion ZADA avec une architecture
-    modulaire adaptée à une application web.
+    Paramètres de fusion ZADA.
+
+    Attributes
+    ----------
+    area_threshold_m2 : float
+        Seuil de surface (m²) pour supprimer les micro-polygones (0 pour désactiver).
+    input_crs_fallback : str
+        CRS assumé si un fichier n'a pas de CRS (par défaut WGS84).
+    output_crs : str
+        CRS de sortie (par défaut WGS84).
+    metric_crs : str
+        CRS métrique temporaire pour les calculs de surface.
+    sample_unique_values : int
+        Taille d'échantillon max par colonne pour l'analyse sémantique légère.
+    similarity_threshold : float
+        Seuil de chevauchement moyen (Jaccard) au‑delà duquel une colonne est dite
+        “commune” (sinon “conflictuelle”).
     """
-    
-    def __init__(self, area_threshold: float = 100, metric_crs: str = "EPSG:3857"):
+    area_threshold_m2: float = 5.0
+    input_crs_fallback: str = "EPSG:4326"
+    output_crs: str = "EPSG:4326"
+    metric_crs: str = "EPSG:3857"
+    sample_unique_values: int = 10
+    similarity_threshold: float = 0.30
+
+
+class ZadaMerger:
+    """
+    Pipeline de fusion ZADA (POO).
+
+    Usage
+    -----
+    merger = ZadaMerger(MergeConfig(area_threshold_m2=5))
+    merger.load_sources(["a.shp", "b.shp", "c.geojson"])
+    result = merger.merge()
+    result.to_file("fusion.geojson", driver="GeoJSON")
+    """
+
+    def __init__(self, config: Optional[MergeConfig] = None) -> None:
+        self.config = config or MergeConfig()
+        self._sources: List[gpd.GeoDataFrame] = []
+        self._column_analysis: Optional[Dict[str, Any]] = None
+
+    # --------------------------------------------------------------------- #
+    # Chargement & Préparation
+    # --------------------------------------------------------------------- #
+    def load_sources(self, paths: Sequence[Path | str]) -> None:
         """
-        Initialise le moteur de fusion
-        
-        Args:
-            area_threshold: Seuil de superficie en mètres carrés
-            metric_crs: Système de coordonnées métrique pour les calculs
+        Charge et prépare les GeoDataFrames (CRS, nettoyage, métadonnées).
+
+        Parameters
+        ----------
+        paths : Sequence[Path | str]
+            Liste de chemins vers des couches vectorielles.
         """
-        self.area_threshold = area_threshold
-        self.metric_crs = metric_crs
-        self.geometry_processor = GeometryProcessor()
-        self.column_analyzer = ColumnAnalyzer()
-        
-        # Statistiques de la fusion
-        self.fusion_stats = {}
-    
-    def prepare_geodataframes(self, 
-                            geodataframes: List[Tuple[gpd.GeoDataFrame, str]]) -> List[gpd.GeoDataFrame]:
-        """
-        Phase 1: Préparation des GeoDataFrames
-        
-        Args:
-            geodataframes: Liste de tuples (GeoDataFrame, nom_source)
-            
-        Returns:
-            Liste des GeoDataFrames préparés
-        """
-        logger.info("=== PHASE 1: PRÉPARATION ===")
-        prepared_gdfs = []
-        
-        for i, (gdf, source_name) in enumerate(geodataframes):
+        self._sources.clear()
+        for idx, p in enumerate(paths):
+            path = Path(p)
             try:
-                # Copie de travail
-                gdf_work = gdf.copy()
-                
-                # Filtrer les géométries nulles
-                gdf_work = gdf_work[gdf_work.geometry.notna()]
-                
-                if gdf_work.empty:
-                    logger.warning(f"Source {source_name}: aucune géométrie valide")
-                    continue
-                
-                # Nettoyage géométrique
-                logger.info(f"Nettoyage géométrique: {source_name}")
-                gdf_work['geometry'] = gdf_work['geometry'].apply(
-                    self.geometry_processor.clean_geometry
-                )
-                gdf_work = gdf_work[gdf_work.geometry.notna()]
-                
-                if gdf_work.empty:
-                    logger.warning(f"Source {source_name}: aucune géométrie après nettoyage")
-                    continue
-                
-                # Ajouter métadonnées de traçabilité
-                gdf_work['original_source_id'] = i
-                gdf_work['original_source_name'] = source_name
-                
-                prepared_gdfs.append(gdf_work)
-                logger.info(f"Préparé: {source_name} ({len(gdf_work)} entités)")
-                
-            except Exception as e:
-                logger.error(f"Erreur préparation {source_name}: {e}")
-                continue
-        
-        if len(prepared_gdfs) < 2:
-            raise FusionError("Au moins 2 fichiers valides requis pour la fusion")
-        
-        return prepared_gdfs
-    
-    def harmonize_columns(self, 
-                         geodataframes: List[gpd.GeoDataFrame]) -> Tuple[List[gpd.GeoDataFrame], Dict]:
+                gdf = gpd.read_file(path)
+                if gdf.crs is None:
+                    logger.warning(
+                        "Le fichier %s n'a pas de CRS. On suppose %s.",
+                        path.name, self.config.input_crs_fallback
+                    )
+                    gdf = gdf.set_crs(self.config.input_crs_fallback, allow_override=True)
+                elif gdf.crs.to_string() != self.config.output_crs:
+                    gdf = gdf.to_crs(self.config.output_crs)
+
+                gdf = gdf[gdf.geometry.notna()]
+                gdf["geometry"] = gdf["geometry"].apply(self._clean_geometry)
+                gdf = gdf[gdf.geometry.notna()]
+
+                # Métadonnées
+                gdf["original_source_id"] = idx
+                gdf["original_source_name"] = path.stem
+
+                self._sources.append(gdf)
+                logger.info("Chargé: %s (%d entités, CRS=%s)", path.name, len(gdf), gdf.crs)
+            except Exception as exc:
+                logger.error("Erreur de chargement %s: %s", path, exc)
+
+        if len(self._sources) < 2:
+            raise ValueError("Au moins deux sources sont nécessaires pour la fusion.")
+
+        # Harmonisation (ici: conservation de toutes colonnes)
+        self._sources, self._column_analysis = self._harmonize_columns_keep_all(self._sources)
+
+    # --------------------------------------------------------------------- #
+    # Fusion principale
+    # --------------------------------------------------------------------- #
+    def merge(self) -> gpd.GeoDataFrame:
         """
-        Harmonisation des colonnes entre GeoDataFrames
-        
-        Args:
-            geodataframes: Liste des GeoDataFrames à harmoniser
-            
-        Returns:
-            Tuple (GeoDataFrames harmonisés, métadonnées d'harmonisation)
+        Exécute la fusion complète (intersections + différences + filtrage métrique).
+
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            Résultat final en `config.output_crs`.
         """
-        logger.info("Analyse et harmonisation des colonnes...")
-        
-        # Analyser les colonnes
-        analysis = self.column_analyzer.analyze_columns(geodataframes)
-        
-        common_columns = analysis['common']
-        conflicting_columns = analysis['conflicting']
-        
-        logger.info(f"Colonnes communes détectées: {len(common_columns)}")
-        if common_columns:
-            logger.info(f"  → {', '.join(common_columns)}")
-        
-        logger.info(f"Colonnes conflictuelles détectées: {len(conflicting_columns)}")
-        if conflicting_columns:
-            logger.info(f"  → {', '.join(conflicting_columns)}")
-        
-        # Conservation de toutes les colonnes (pas de préfixe)
-        harmonized_gdfs = []
-        for i, gdf in enumerate(geodataframes):
-            gdf_copy = gdf.copy()
-            
-            # S'assurer que les métadonnées sont présentes
-            if 'original_source_id' not in gdf_copy.columns:
-                gdf_copy['original_source_id'] = i
-            if 'original_source_name' not in gdf_copy.columns:
-                gdf_copy['original_source_name'] = f"source_{i}"
-            
-            harmonized_gdfs.append(gdf_copy)
-            logger.info(f"Source {i}: {len(gdf_copy.columns)} colonnes conservées")
-        
-        return harmonized_gdfs, {
-            'common_columns': common_columns,
-            'conflicting_columns': conflicting_columns,
-            'analysis': analysis
-        }
-    
-    def compute_intersections(self, geodataframes: List[gpd.GeoDataFrame]) -> List[gpd.GeoDataFrame]:
-        """
-        Phase 2: Calcul des intersections entre toutes les paires de GeoDataFrames
-        
-        Args:
-            geodataframes: Liste des GeoDataFrames harmonisés
-            
-        Returns:
-            Liste des GeoDataFrames d'intersections
-        """
-        logger.info("=== PHASE 2: INTERSECTIONS ===")
-        intersections = []
-        n_files = len(geodataframes)
-        
-        # Intersections par paires
-        for i in range(n_files):
-            for j in range(i + 1, n_files):
-                gdf1, gdf2 = geodataframes[i], geodataframes[j]
-                
-                # Récupérer les noms pour l'affichage
-                name1 = gdf1['original_source_name'].iloc[0] if not gdf1.empty else f"source_{i}"
-                name2 = gdf2['original_source_name'].iloc[0] if not gdf2.empty else f"source_{j}"
-                
-                logger.info(f"Intersection {name1} ↔ {name2}")
-                
-                try:
-                    # Calcul de l'intersection avec GeoPandas
-                    intersection_result = gpd.overlay(gdf1, gdf2, how='intersection')
-                    
-                    if not intersection_result.empty:
-                        # Ajouter métadonnées d'intersection
-                        intersection_result['intersection_type'] = 'intersection'
-                        intersection_result['source_pair'] = f"{i}+{j}"
-                        intersection_result['source_names'] = f"{name1}+{name2}"
-                        
-                        # Nettoyer les géométries résultantes
-                        intersection_result['geometry'] = intersection_result['geometry'].apply(
-                            self.geometry_processor.clean_geometry
-                        )
-                        intersection_result = intersection_result[intersection_result.geometry.notna()]
-                        
-                        if not intersection_result.empty:
-                            intersections.append(intersection_result)
-                            logger.info(f"  → {len(intersection_result)} intersections valides")
-                        else:
-                            logger.info(f"  → Aucune intersection après nettoyage")
-                    else:
-                        logger.info(f"  → Aucune intersection géométrique")
-                
-                except Exception as e:
-                    logger.error(f"Erreur intersection {name1}-{name2}: {e}")
-                    continue
-        
-        logger.info(f"Total: {len(intersections)} groupes d'intersections")
-        return intersections
-    
-    def compute_differences(self, 
-                          geodataframes: List[gpd.GeoDataFrame], 
-                          intersections: List[gpd.GeoDataFrame]) -> List[gpd.GeoDataFrame]:
-        """
-        Phase 3: Calcul des différences (zones uniques à chaque source)
-        
-        Args:
-            geodataframes: GeoDataFrames originaux
-            intersections: Liste des intersections calculées
-            
-        Returns:
-            Liste des GeoDataFrames de différences
-        """
-        logger.info("=== PHASE 3: DIFFÉRENCES ===")
-        differences = []
-        
-        if intersections:
-            # Union de toutes les intersections
-            logger.info("Calcul de l'union des intersections...")
-            
-            all_intersections = gpd.GeoDataFrame(
-                pd.concat(intersections, ignore_index=True),
-                crs=geodataframes[0].crs
-            )
-            
-            # Créer l'union géométrique
-            try:
-                union_geometry = unary_union(all_intersections.geometry)
-                union_gdf = gpd.GeoDataFrame(
-                    [{'geometry': union_geometry}],
-                    crs=geodataframes[0].crs
-                )
-                
-                # Calculer les différences pour chaque source
-                for i, gdf in enumerate(geodataframes):
-                    name = gdf['original_source_name'].iloc[0] if not gdf.empty else f"source_{i}"
-                    logger.info(f"Différence pour {name}...")
-                    
-                    try:
-                        difference_result = gpd.overlay(gdf, union_gdf, how='difference')
-                        
-                        if not difference_result.empty:
-                            # Ajouter métadonnées
-                            difference_result['intersection_type'] = 'difference'
-                            difference_result['source_pair'] = str(i)
-                            difference_result['source_names'] = name
-                            
-                            # Nettoyer les géométries
-                            difference_result['geometry'] = difference_result['geometry'].apply(
-                                self.geometry_processor.clean_geometry
-                            )
-                            difference_result = difference_result[difference_result.geometry.notna()]
-                            
-                            if not difference_result.empty:
-                                differences.append(difference_result)
-                                logger.info(f"  → {len(difference_result)} zones uniques")
-                            else:
-                                logger.info(f"  → Aucune zone unique après nettoyage")
-                        else:
-                            logger.info(f"  → Aucune zone unique")
-                    
-                    except Exception as e:
-                        logger.error(f"Erreur différence {name}: {e}")
-                        continue
-            
-            except Exception as e:
-                logger.error(f"Erreur calcul union: {e}")
-                # Fallback: conserver les sources originales
-                differences = self._fallback_to_originals(geodataframes)
-        
-        else:
-            logger.info("Aucune intersection, conservation des sources originales")
-            differences = self._fallback_to_originals(geodataframes)
-        
-        return differences
-    
-    def _fallback_to_originals(self, geodataframes: List[gpd.GeoDataFrame]) -> List[gpd.GeoDataFrame]:
-        """Fallback: conservation des GeoDataFrames originaux"""
-        fallback_differences = []
-        
-        for i, gdf in enumerate(geodataframes):
-            gdf_copy = gdf.copy()
-            name = gdf['original_source_name'].iloc[0] if not gdf.empty else f"source_{i}"
-            
-            gdf_copy['intersection_type'] = 'original'
-            gdf_copy['source_pair'] = str(i)
-            gdf_copy['source_names'] = name
-            
-            fallback_differences.append(gdf_copy)
-        
-        return fallback_differences
-    
-    def finalize_fusion(self, 
-                       intersections: List[gpd.GeoDataFrame], 
-                       differences: List[gpd.GeoDataFrame]) -> Optional[gpd.GeoDataFrame]:
-        """
-        Phase 4: Finalisation de la fusion
-        
-        Args:
-            intersections: Liste des intersections
-            differences: Liste des différences
-            
-        Returns:
-            GeoDataFrame final fusionné
-        """
-        logger.info("=== PHASE 4: FUSION FINALE ===")
-        
-        all_results = intersections + differences
-        
-        if not all_results:
-            logger.error("Aucun résultat à fusionner")
+        intersections = self._compute_pairwise_intersections(self._sources)
+        differences = self._compute_differences(self._sources, intersections)
+
+        all_parts: List[gpd.GeoDataFrame] = intersections + differences
+        if not all_parts:
+            raise RuntimeError("Aucun résultat généré (intersections + différences vides).")
+
+        result = gpd.GeoDataFrame(
+            pd.concat(all_parts, ignore_index=True), crs=self.config.output_crs
+        )
+        result = result[result.geometry.notna()]
+        result = result[~result.geometry.is_empty]
+
+        if self.config.area_threshold_m2 > 0:
+            result = self._metric_filter(result, self.config.area_threshold_m2)
+
+        self._log_summary(result)
+        return result
+
+    # --------------------------------------------------------------------- #
+    # Utilitaires: nettoyage & colonnes
+    # --------------------------------------------------------------------- #
+    @staticmethod
+    def _clean_geometry(geom: Optional[shapely_base.BaseGeometry]) -> Optional[shapely_base.BaseGeometry]:
+        """Nettoyage géométrique robuste, retourne Polygon/MultiPolygon ou None."""
+        if geom is None or geom.is_empty:
             return None
-        
         try:
-            # Concaténation de tous les résultats
-            final_result = gpd.GeoDataFrame(
-                pd.concat(all_results, ignore_index=True),
-                crs=all_results[0].crs
+            if not geom.is_valid:
+                # buffer(0) pour corriger les self-intersections
+                geom = geom.buffer(0)
+
+            if isinstance(geom, (Polygon, MultiPolygon)):
+                return geom
+
+            if isinstance(geom, GeometryCollection):
+                polys = [g for g in geom.geoms if isinstance(g, (Polygon, MultiPolygon))]
+                if not polys:
+                    return None
+                return MultiPolygon(polys) if len(polys) > 1 else polys[0]
+        except Exception:
+            return None
+        return None
+
+    def _analyze_columns(
+        self, geo_dfs: Sequence[gpd.GeoDataFrame]
+    ) -> Dict[str, Any]:
+        """
+        Analyse sommaire pour distinguer colonnes communes vs conflictuelles.
+        """
+        columns_per_file: Dict[int, set] = {}
+        all_cols: set = set()
+        for i, gdf in enumerate(geo_dfs):
+            cols = set(gdf.columns) - {"geometry"}
+            columns_per_file[i] = cols
+            all_cols.update(cols)
+
+        shared: List[Tuple[str, List[int]]] = []
+        for col in all_cols:
+            files_with_col = [i for i in range(len(geo_dfs)) if col in columns_per_file[i]]
+            if len(files_with_col) > 1:
+                shared.append((col, files_with_col))
+
+        commons: List[str] = []
+        conflicts: List[str] = []
+
+        for col, file_ids in shared:
+            values_by_file: Dict[int, set] = {}
+            for fid in file_ids:
+                gdf = geo_dfs[fid]
+                if col in gdf.columns:
+                    sample = (
+                        gdf[col]
+                        .dropna()
+                        .astype(str)
+                        .unique()[: self.config.sample_unique_values]
+                    )
+                    values_by_file[fid] = set(sample)
+
+            overlaps: List[float] = []
+            keys = list(values_by_file.keys())
+            for i in range(len(keys)):
+                for j in range(i + 1, len(keys)):
+                    a = values_by_file[keys[i]]
+                    b = values_by_file[keys[j]]
+                    if a and b:
+                        inter = len(a.intersection(b))
+                        uni = len(a.union(b))
+                        overlaps.append(inter / uni if uni else 0.0)
+
+            mean_overlap = sum(overlaps) / len(overlaps) if overlaps else 0.0
+            if mean_overlap > self.config.similarity_threshold:
+                commons.append(col)
+            else:
+                conflicts.append(col)
+
+        return {
+            "communes": commons,
+            "conflictuelles": conflicts,
+            "details": {"partagees": shared, "par_fichier": columns_per_file},
+        }
+
+    def _harmonize_columns_keep_all(
+        self, geo_dfs: List[gpd.GeoDataFrame]
+    ) -> Tuple[List[gpd.GeoDataFrame], Dict[str, Any]]:
+        """
+        Harmonise en conservant toutes les colonnes (sans préfixe). Ajoute des métadonnées.
+        """
+        logger.info("Analyse des colonnes…")
+        analysis = self._analyze_columns(geo_dfs)
+        logger.info(
+            "Colonnes communes (contenu fusionné par overlay): %d",
+            len(analysis["communes"])
+        )
+        if analysis["communes"]:
+            logger.debug("→ %s", ", ".join(analysis["communes"]))
+        logger.info(
+            "Colonnes conflictuelles (gardées telles quelles): %d",
+            len(analysis["conflictuelles"])
+        )
+        if analysis["conflictuelles"]:
+            logger.debug("→ %s", ", ".join(analysis["conflictuelles"]))
+
+        kept: List[gpd.GeoDataFrame] = []
+        for i, gdf in enumerate(geo_dfs):
+            gdf_copy = gdf.copy()
+            if "original_source_id" not in gdf_copy.columns:
+                gdf_copy["original_source_id"] = i
+            if "original_source_name" not in gdf_copy.columns:
+                gdf_copy["original_source_name"] = f"source_{i}"
+            kept.append(gdf_copy)
+            logger.info("Source %d: %d colonnes conservées (toutes).", i, len(gdf_copy.columns))
+
+        return kept, {
+            "colonnes_communes": analysis["communes"],
+            "colonnes_conflictuelles": analysis["conflictuelles"],
+            "toutes_colonnes": True,
+        }
+
+    # --------------------------------------------------------------------- #
+    # Intersections & Différences
+    # --------------------------------------------------------------------- #
+    def _compute_pairwise_intersections(
+        self, geo_dfs: Sequence[gpd.GeoDataFrame]
+    ) -> List[gpd.GeoDataFrame]:
+        """Intersections par paires avec conservation des attributs."""
+        logger.info("=== PHASE 2: INTERSECTIONS ===")
+        results: List[gpd.GeoDataFrame] = []
+        n = len(geo_dfs)
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                gdf1, gdf2 = geo_dfs[i], geo_dfs[j]
+                name1 = str(gdf1["original_source_name"].iloc[0])
+                name2 = str(gdf2["original_source_name"].iloc[0])
+                logger.info("Intersection %s ↔ %s", name1, name2)
+
+                try:
+                    inter = gpd.overlay(gdf1, gdf2, how="intersection")
+                    if inter.empty:
+                        logger.info("Aucune intersection trouvée.")
+                        continue
+
+                    inter["type"] = "intersection"
+                    inter["sources"] = f"{i}+{j}"
+                    inter["source_names"] = f"{name1}+{name2}"
+                    results.append(inter)
+                    logger.info("→ %d intersections", len(inter))
+                except Exception as exc:
+                    logger.error("Erreur intersection %d-%d: %s", i, j, exc)
+                    logger.debug("Colonnes GDF1: %s", list(gdf1.columns))
+                    logger.debug("Colonnes GDF2: %s", list(gdf2.columns))
+        return results
+
+    def _compute_differences(
+        self,
+        geo_dfs: Sequence[gpd.GeoDataFrame],
+        intersections: Sequence[gpd.GeoDataFrame],
+    ) -> List[gpd.GeoDataFrame]:
+        """Soustraction des intersections pour obtenir les zones uniques."""
+        logger.info("=== PHASE 3: DIFFÉRENCES ===")
+        diffs: List[gpd.GeoDataFrame] = []
+
+        if intersections:
+            logger.info("Calcul de l'union des intersections…")
+            all_inter = gpd.GeoDataFrame(
+                pd.concat(intersections, ignore_index=True),
+                crs=geo_dfs[0].crs,
             )
-            
-            logger.info("Nettoyage final...")
-            
-            # Supprimer les géométries vides/nulles
-            initial_count = len(final_result)
-            final_result = final_result[final_result.geometry.notna()]
-            final_result = final_result[~final_result.geometry.is_empty]
-            
-            logger.info(f"Géométries vides supprimées: {initial_count - len(final_result)}")
-            
-            # Application du filtrage par superficie
-            if self.area_threshold > 0:
-                final_result = self.geometry_processor.apply_area_filter(
-                    final_result, self.area_threshold, self.metric_crs
-                )
-            
-            # Calculer les statistiques finales
-            self._compute_fusion_statistics(final_result)
-            
-            logger.info(f" FUSION TERMINÉE: {len(final_result)} entités finales")
-            
-            return final_result
-        
-        except Exception as e:
-            logger.error(f"Erreur fusion finale: {e}")
-            raise FusionError(f"Erreur lors de la fusion finale: {e}")
-    
-    def _compute_fusion_statistics(self, result_gdf: gpd.GeoDataFrame):
-        """Calcule les statistiques de la fusion"""
-        if 'intersection_type' in result_gdf.columns:
-            type_counts = result_gdf['intersection_type'].value_counts()
-            
-            self.fusion_stats = {
-                'total_features': len(result_gdf),
-                'intersections': type_counts.get('intersection', 0),
-                'differences': type_counts.get('difference', 0),
-                'originals': type_counts.get('original', 0),
-                'area_threshold': self.area_threshold,
-                'crs': str(result_gdf.crs)
-            }
-            
-            logger.info("STATISTIQUES FINALES:")
-            for key, value in self.fusion_stats.items():
-                logger.info(f"  {key}: {value}")
+            union_geom = unary_union(all_inter.geometry)
+            union_gdf = gpd.GeoDataFrame([{"geometry": union_geom}], crs=geo_dfs[0].crs)
+
+            for i, gdf in enumerate(geo_dfs):
+                name = str(gdf["original_source_name"].iloc[0])
+                logger.info("Différence pour %s…", name)
+                try:
+                    diff = gpd.overlay(gdf, union_gdf, how="difference")
+                    if diff.empty:
+                        logger.info("→ Aucune zone unique.")
+                        continue
+                    diff["type"] = "difference"
+                    diff["sources"] = str(i)
+                    diff["source_names"] = name
+                    diffs.append(diff)
+                    logger.info("→ %d zones uniques", len(diff))
+                except Exception as exc:
+                    logger.error("Erreur différence %d: %s", i, exc)
         else:
-            self.fusion_stats = {
-                'total_features': len(result_gdf),
-                'area_threshold': self.area_threshold,
-                'crs': str(result_gdf.crs)
-            }
-    
-    def execute_fusion(self, 
-                      geodataframes: List[Tuple[gpd.GeoDataFrame, str]]) -> Optional[gpd.GeoDataFrame]:
+            logger.info("Aucune intersection → conservation des sources originales.")
+            for i, gdf in enumerate(geo_dfs):
+                copy = gdf.copy()
+                name = str(copy["original_source_name"].iloc[0])
+                copy["type"] = "original"
+                copy["sources"] = str(i)
+                copy["source_names"] = name
+                diffs.append(copy)
+        return diffs
+
+    # --------------------------------------------------------------------- #
+    # Filtrage métrique
+    # --------------------------------------------------------------------- #
+    def _metric_filter(self, gdf: gpd.GeoDataFrame, area_threshold_m2: float) -> gpd.GeoDataFrame:
         """
-        Exécute la fusion complète ZADA
-        
-        Args:
-            geodataframes: Liste de tuples (GeoDataFrame, nom_source)
-            
-        Returns:
-            GeoDataFrame fusionné ou None si erreur
+        Filtre les géométries dont l'aire (en m²) est < `area_threshold_m2`.
         """
-        try:
-            logger.info("Démarrage de la fusion ZADA...")
-            
-            # Phase 1: Préparation
-            prepared_gdfs = self.prepare_geodataframes(geodataframes)
-            
-            # Harmonisation des colonnes
-            harmonized_gdfs, column_metadata = self.harmonize_columns(prepared_gdfs)
-            
-            # Phase 2: Intersections
-            intersections = self.compute_intersections(harmonized_gdfs)
-            
-            # Phase 3: Différences
-            differences = self.compute_differences(harmonized_gdfs, intersections)
-            
-            # Phase 4: Fusion finale
-            final_result = self.finalize_fusion(intersections, differences)
-            
-            if final_result is not None:
-                logger.info("Fusion ZADA réussie!")
-                return final_result
-            else:
-                logger.error("Échec de la fusion ZADA")
-                return None
-        
-        except Exception as e:
-            logger.error(f"Erreur critique fusion ZADA: {e}")
-            raise FusionError(f"Fusion ZADA échouée: {e}")
-    
-    def get_fusion_statistics(self) -> Dict:
-        """Retourne les statistiques de la dernière fusion"""
-        return self.fusion_stats.copy()
-    
-    def filter_by_criterion(self, 
-                           gdf: gpd.GeoDataFrame, 
-                           criterion: str, 
-                           values: Optional[List] = None) -> gpd.GeoDataFrame:
-        """
-        Filtre le résultat de fusion selon un critère spécifique
-        
-        Args:
-            gdf: GeoDataFrame fusionné
-            criterion: Nom de la colonne critère
-            values: Valeurs spécifiques à filtrer (optionnel)
-            
-        Returns:
-            GeoDataFrame filtré
-        """
-        if criterion not in gdf.columns:
-            logger.warning(f"Critère '{criterion}' non trouvé dans les colonnes")
+        if gdf.empty or gdf.geometry.isna().all():
             return gdf
-        
+
+        if gdf.crs is None or gdf.crs.to_string() != self.config.output_crs:
+            logger.info("Harmonisation CRS → %s avant filtrage.", self.config.output_crs)
+            gdf = gdf.set_crs(self.config.output_crs, allow_override=True)
+
+        logger.info(
+            "Application du filtrage métrique (seuil=%.2f m²) via %s…",
+            area_threshold_m2, self.config.metric_crs
+        )
+        metric = gdf.to_crs(self.config.metric_crs)
+        areas = metric.geometry.area
+
         try:
-            if values is None:
-                # Retourner toutes les entités avec une valeur non-nulle pour ce critère
-                filtered = gdf[gdf[criterion].notna()]
-            else:
-                # Filtrer selon les valeurs spécifiées
-                filtered = gdf[gdf[criterion].isin(values)]
-            
-            logger.info(f"Filtrage par '{criterion}': {len(filtered)}/{len(gdf)} entités")
-            return filtered
-        
-        except Exception as e:
-            logger.error(f"Erreur filtrage par critère: {e}")
-            return gdf
-    
-    def export_to_geojson(self, 
-                         gdf: gpd.GeoDataFrame, 
-                         output_path: Path) -> bool:
+            if areas.max() < area_threshold_m2:
+                new_thr = float(max(areas.min() * 0.1, areas.quantile(0.05)))
+                logger.warning(
+                    "Seuil trop élevé (max=%.2f m²). Ajustement automatique → %.2f m²",
+                    float(areas.max()), new_thr
+                )
+                area_threshold_m2 = new_thr
+        except Exception:
+            pass
+
+        initial = len(metric)
+        mask = areas >= area_threshold_m2
+        filt = metric[mask].copy()
+        removed = initial - len(filt)
+        pct = (removed / initial * 100.0) if initial else 0.0
+        logger.info("Filtrage: %d micro-polygones supprimés (%.1f%%).", removed, pct)
+
+        return filt.to_crs(self.config.output_crs)
+
+    # --------------------------------------------------------------------- #
+    # Divers
+    # --------------------------------------------------------------------- #
+    @staticmethod
+    def save(gdf: gpd.GeoDataFrame, path: Path | str) -> None:
         """
-        Exporte le résultat en GeoJSON
-        
-        Args:
-            gdf: GeoDataFrame à exporter
-            output_path: Chemin de sortie
-            
-        Returns:
-            True si succès, False sinon
+        Sauvegarde utilitaire (déduit le driver depuis l'extension).
+
+        .geojson → GeoJSON, .gpkg → GPKG, .shp → ESRI Shapefile, etc.
         """
-        try:
-            # S'assurer que le dossier parent existe
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Exporter en GeoJSON
-            gdf.to_file(output_path, driver='GeoJSON')
-            
-            logger.info(f"Export GeoJSON réussi: {output_path}")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Erreur export GeoJSON: {e}")
-            return False
+        out = Path(path)
+        ext = out.suffix.lower()
+        driver = {
+            ".geojson": "GeoJSON",
+            ".json": "GeoJSON",
+            ".gpkg": "GPKG",
+            ".shp": "ESRI Shapefile",
+        }.get(ext, None)
+
+        if driver is None:
+            raise ValueError(
+                f"Extension non supportée pour {out.name}. "
+                "Utilise .geojson, .gpkg ou .shp."
+            )
+        gdf.to_file(out, driver=driver)
+        logger.info("Fichier écrit: %s (%s)", out, driver)
+
+    def _log_summary(self, gdf: gpd.GeoDataFrame) -> None:
+        """Petit récapitulatif lisible dans les logs."""
+        logger.info("=== PHASE 4: FUSION TERMINÉE ===")
+        logger.info("Total: %d entités", len(gdf))
+        if "type" in gdf.columns:
+            inter = (gdf["type"] == "intersection").sum()
+            diff = (gdf["type"] == "difference").sum()
+            orig = (gdf["type"] == "original").sum() if "original" in gdf["type"].unique() else 0
+            logger.info("Intersections: %d | Différences: %d | Originaux: %d", inter, diff, orig)
