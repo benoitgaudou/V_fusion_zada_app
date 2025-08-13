@@ -46,7 +46,10 @@ class ZADAMapManager {
             })
         };
         baseLayers['OpenStreetMap'].addTo(map);
-        L.control.layers(baseLayers).addTo(map);
+        L.control.layers(baseLayers, {}, {
+            collapsed: false,
+            position: 'bottomleft'
+        }).addTo(map);
     }
 
     // Style neutre (utilisé si la feature n’a pas de style)
