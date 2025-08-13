@@ -65,53 +65,35 @@ def _get_merger(area_threshold: float | None = None) -> ZadaMerger:
 
 
 #
-def _non_tech_columns(
-    gdf: gpd.GeoDataFrame,
-    excluded_exact: Iterable[str] = (
-        "geometry", "Original_source_id", "Original_source_name",
-        "intersection_type", "type", "sources", "source_names", "id"
-    ),
-    excluded_patterns: Iterable[str] = ()
-) -> List[str]:
+def _non_tech_columns(gdf: gpd.GeoDataFrame):
     """
-    Retourne les colonnes 'métier' en excluant :
-      - les noms exacts (insensible à la casse)
-      - les préfixes avec '*', ex: 'nom*', 'id*', 'source_*'
+    Retourne les colonnes 'métier' affichable en UI,
+    en excluant les champs techniques (casse insensible),
+    en tenant compte du VRAI nom de la géométrie,
+    et en excluant les colonnes commençant par certains préfixes, ex: 'nom', 'id', 'source'
     """
-
-    def norm(s: str) -> str:
-        # normalisation simple: strip + minuscules + sans accents
-        s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
-        return s.strip().lower()
+    excluded_base = {"geometry", "intersection_type", "type", "source", "source_names"}
+    # les préfixes des éléments à exclure
+    prefixes_to_exclude = ("original", "source", "id")
 
     # géométrie réelle (peut ne pas s'appeler 'geometry')
     try:
         geom_col = gdf.geometry.name
     except Exception:
         geom_col = "geometry"
-
-    # 1) Set pour exclusions exactes (normalisées)
-    exact = {norm(x) for x in set(excluded_exact) | {geom_col}}
-
-    # 2) Préfixes à exclure (soit donnés via excluded_patterns, soit tu peux
-    #    décider d'interpréter AUSSI certains exacts comme préfixes)
-    #    On accepte des motifs avec étoile finale 'xxx*'
-    prefixes = []
-    for pat in excluded_patterns:
-        p = norm(pat)
-        if p.endswith("*"):
-            prefixes.append(p[:-1])  # retire l’étoile -> vrai préfixe
-        else:
-            # si l’utilisateur met un motif sans '*', on le traite comme exact
-            exact.add(p)
+        
+    excluded_lc = {x.lower() for x in (excluded_base | {geom_col})}
+    
 
     def is_excluded(col: str) -> bool:
-        c = norm(col)
-        if c in exact:
+        c = col.lower()
+        if c in excluded_lc:
             return True
-        return any(c.startswith(pfx) for pfx in prefixes if pfx)
-
-    # retourne seulement les colonnes non exclues (ordre préservé)
+        
+        # Exclure les colonnes commençant par les préfixes donnés
+        return any(c.startswith(prefix) for prefix in prefixes_to_exclude)
+        
+    # Filtrage avec la prise en compte des préfixes
     return [c for c in gdf.columns if not is_excluded(c)]
 
 
@@ -166,12 +148,7 @@ def upload_files():
             stage_paths.append(str(stage_path))
 
             # infos pour UI
-            cols = _non_tech_columns(
-                gdf,
-                excluded_exact={ "geometry", "Original_source_id", "Original_source_name",
-                                "intersection_type", "type", "sources", "source_names", "id"},
-                excluded_patterns={"nom*", "Id*", "source_*", "Original_souurce","source_names*","intersection*", "Origin*"}
-                )
+            cols = _non_tech_columns(gdf)
             
             loaded_files_info.append({
                 'name': stem,
@@ -199,7 +176,6 @@ def upload_files():
         session['candidate_fields'] = sorted(candidate_fields_intersection) if candidate_fields_intersection else []
 
         # >>> LANCE LA FUSION ICI (sans critère) <<<
-        # >>> LANCE LA FUSION ICI (sans critère) <<<
         if len(stage_paths) < 2:
             flash("Au moins 2 sources sont nécessaires pour fusionner.", "error")
             return redirect(url_for('main.home'))
@@ -222,15 +198,9 @@ def upload_files():
         result_gdf.to_file(out_geojson, driver="GeoJSON")
 
         # Métadonnées pour la page 2
-        _wipe_fusion_session()
         session['fusion_result_metadata'] = {
             'export_path': str(out_geojson),
-            'available_fields': _non_tech_columns(
-                result_gdf,
-                excluded_exact={ "geometry", "Original_source_id", "Original_source_name",
-                                "intersection_type", "type", "sources", "source_names", "id"},
-                excluded_patterns={"nom*", "id*", "source*", "Original_source","source_names*","intersection*", "Origin*"}
-                ),
+            'available_fields': _non_tech_columns(result_gdf),
             'total_features': int(len(result_gdf)),
             'crs': str(result_gdf.crs),
             'bounds': result_gdf.total_bounds.tolist() if not result_gdf.empty else []
