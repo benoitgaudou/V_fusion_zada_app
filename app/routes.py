@@ -17,7 +17,7 @@ import datetime as dt
 from app.forms import FileUploadForm, FusionSIGForm, NLPQueryForm
 from app.modules.file_loader import FileLoader, FileLoaderConfig
 from app.modules.zada_fusion import ZadaMerger, MergeConfig
-from app.modules.map_generator import MapDataGenerator  # version simplifiée: generate_thematic_geojson + get_map_bounds
+from app.modules.map_generator import MapDataGenerator
 from app.modules.exceptions import ZADAException, FileLoadingError
 
 main_bp = Blueprint('main', __name__)
