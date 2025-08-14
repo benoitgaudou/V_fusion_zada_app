@@ -28,10 +28,10 @@ class MapDataGenerator:
     def __init__(self):
         # Palettes catégorielles simples (on cycle si plus de valeurs que de couleurs)
         self.categorical_palettes = {
-            "default": ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#DDA0DD", "#FFD166", "#118AB2"],
-            "pastel":  ["#FFB3BA", "#FFDFBA", "#FFFFBA", "#BAFFC9", "#BAE1FF", "#D4BAFF", "#FFB3FF"],
-            "vibrant": ["#FF5722", "#009688", "#2196F3", "#4CAF50", "#FFC107", "#9C27B0", "#FF9800"],
-            "earth":   ["#8D6E63", "#A1887F", "#BCAAA4", "#D7CCC8", "#6D4C41", "#5D4037", "#3E2723"],
+            "default": ['#ffffcc','#c7e9b4','#7fcdbb','#41b6c4','#1d91c0','#225ea8','#0c2c84'],
+            "pastel":  ['#d73027','#fc8d59','#fee08b','#ffffbf','#d9ef8b','#91cf60','#1a9850'],
+            "vibrant": ['#e41a1c','#377eb8','#4daf4a','#984ea3','#ff7f00','#ffff33','#a65628'],
+            "earth":   ['#edf8fb','#ccece6','#99d8c9','#66c2a4','#41ae76','#238b45','#005824'],
         }
 
     # ------------------------------------------------------------------ #

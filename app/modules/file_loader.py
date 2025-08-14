@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple, Union
 
 import geopandas as gpd
-from werkzeug.datastructures import FileStorage  # Flask
+from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 try:

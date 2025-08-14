@@ -1,6 +1,6 @@
-// ============================================================================
-// static/js/leaflet_script.js - Version simplifiée pour cartographie thématique
-// ============================================================================
+// =============================
+// static/js/leaflet_script.js 
+// =============================
 
 class ZADAMapManager {
     constructor() {
@@ -40,9 +40,15 @@ class ZADAMapManager {
                 attribution: '© OpenStreetMap contributors',
                 maxZoom: 19
             }),
-            'CartoDB Positron': L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '© CartoDB © OpenStreetMap contributors',
-                maxZoom: 19
+            'OpenTopoMap' : L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+                maxZoom: 17,
+                attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)'
+            }),
+            'Stadia_AlidadeSmoothDark': L.tileLayer('https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.{ext}', {
+                minZoom: 0,
+                maxZoom: 20,
+                attribution: '&copy; <a href="https://www.stadiamaps.com/" target="_blank">Stadia Maps</a> &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                ext: 'png'
             })
         };
         baseLayers['OpenStreetMap'].addTo(map);
