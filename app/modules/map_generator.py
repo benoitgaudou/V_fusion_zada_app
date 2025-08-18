@@ -186,7 +186,7 @@ class MapDataGenerator:
     
     def _norm(name: str) -> str:
         
-        return re.sub(r'\s+',' ', str(name).strip().lower)
+        return re.sub(r'\s+',' ', str(name).strip().lower())
     
     def prepare_criterion_options(self, gdf: gpd.GeoDataFrame) -> List[Dict]:
         """

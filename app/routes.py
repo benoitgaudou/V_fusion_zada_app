@@ -20,6 +20,10 @@ from app.modules.zada_fusion import ZadaMerger, MergeConfig
 from app.modules.map_generator import MapDataGenerator
 from app.modules.exceptions import ZADAException, FileLoadingError
 
+from app.modules.nlp import nlp_engine
+from app.forms import NLPInitForm
+
+
 main_bp = Blueprint('main', __name__)
 logger = logging.getLogger(__name__)
 
@@ -372,24 +376,68 @@ def api_export_thematic_map(field_name):
         return jsonify({'success': False, 'error': 'Erreur export.'}), 500
 
 
-# -------------------------------------------------------------------
-# Les autres endpoints que tu avais (NLP, palettes, fields, etc.)
-# → tu peux les laisser tels quels; ils liront la session/les fichiers.
-# -------------------------------------------------------------------
-@main_bp.route('/nlp_query')
-def nlp_query():
-    form = NLPQueryForm()
-    return render_template('nlp_query.html', form=form)
 
-@main_bp.route('/api/download_result/<path:filename>')
-def download_result(filename):
+# -------------------------------------------------------------------
+# NLP Pour la Recherche Sémantique
+# -------------------------------------------------------------------
+
+
+from app.modules.nlp import nlp_engine
+from app.modules.nlp.api import init_from_fusion_export, semantic_search
+
+@main_bp.route('/nlp_query', methods=['GET'])
+def nlp_query():
+    from app.forms import NLPQueryForm
+    form = NLPQueryForm()
+    stats = nlp_engine.stats()
+    return render_template('nlp_query.html', form=form, nlp_ready=stats["ready"], stats=stats)
+
+
+@main_bp.route('/api/nlp/init', methods=['POST'])
+def api_nlp_init():
+    meta = session.get('fusion_result_metadata')
+    if not meta or not meta.get('export_path'):
+        return jsonify({'success': False, 'error': "Aucun résultat de fusion en session."}), 400
     try:
-        results_folder = Path(current_app.config.get('RESULTS_FOLDER', 'out'))
-        file_path = results_folder / filename
-        if not file_path.exists():
-            return jsonify({'error': 'Fichier non trouvé'}), 404
-        from flask import send_file
-        return send_file(file_path, as_attachment=True)
+        return jsonify(init_from_fusion_export(meta['export_path']))
     except Exception as e:
-        logger.error(f"Erreur téléchargement: {e}")
-        return jsonify({'error': 'Erreur lors du téléchargement'}), 500
+        current_app.logger.exception("api_nlp_init")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@main_bp.route('/api/nlp/search', methods=['POST'])
+def api_nlp_search():
+    meta = session.get('fusion_result_metadata')
+    if not meta or not meta.get('export_path'):
+        return jsonify({'success': False, 'error': "Aucun résultat de fusion en session."}), 400
+
+    data = request.get_json(silent=True) or request.form
+    q = (data.get('query') or '').strip()
+    top_k = int(data.get('max_results', 10))
+    if not q:
+        return jsonify({'success': False, 'error': 'Requête vide'}), 400
+
+    try:
+        return jsonify(semantic_search(meta['export_path'], q, top_k=top_k))
+    except Exception as e:
+        current_app.logger.exception("api_nlp_search")
+        return jsonify({'success': False, 'error': str(e)}), 500
+    
+@main_bp.route('/api/nlp/models', methods=['GET'])
+def api_nlp_models():
+    try:
+        models = nlp_engine.available_models()  # renvoie [] si rien
+        return jsonify({"success": True, "models": models})
+    except Exception as e:
+        current_app.logger.exception("api_nlp_models")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@main_bp.route('/api/nlp/status', methods=['GET'])
+def api_nlp_status():
+    try:
+        st = nlp_engine.stats()
+        return jsonify({"success": True, "ready": st.get("ready", False), "stats": st})
+    except Exception as e:
+        current_app.logger.exception("api_nlp_status")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+

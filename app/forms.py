@@ -53,19 +53,68 @@ class FusionSIGForm(FlaskForm):
     submit = SubmitField("Lancer la fusion")
 
 
+
+### Partie de NLP (NLP pour la partie de Recherche sémantique)
+
+from wtforms import SelectField, IntegerField, BooleanField
+
+# Étendre NLPQueryForm existant avec sélection de modèle
 class NLPQueryForm(FlaskForm):
-    """Formulaire de recherche sémantique NLP"""
+    """Formulaire de recherche sémantique NLP - Version étendue"""
     
+    # Champ existant - garder tel quel
     query = TextAreaField(
         'Requête de recherche',
         validators=[DataRequired("Veuillez saisir une requête")],
         render_kw={"rows": 3, "placeholder": "Ex: zones agricoles près des rivières"}
     )
     
+    # Champ existant - garder tel quel  
     similarity_threshold = FloatField(
         'Seuil de similarité',
         default=0.7,
         validators=[NumberRange(min=0, max=1, message="Entre 0 et 1")]
     )
     
+    # NOUVEAU : Sélection du modèle
+    model_selection = SelectField(
+        'Modèle NLP',
+        choices=[],  # Sera rempli dynamiquement
+        validators=[Optional()],
+        description="Modèle à utiliser pour la recherche (automatique si vide)"
+    )
+    
+    # NOUVEAU : Nombre de résultats
+    max_results = IntegerField(
+        'Nombre de résultats',
+        default=10,
+        validators=[NumberRange(min=1, max=50, message="Entre 1 et 50")]
+    )
+    
+    # NOUVEAU : Afficher sur carte
+    show_map = BooleanField(
+        'Afficher sur la carte',
+        default=True
+    )
+    
     submit = SubmitField('Rechercher')
+
+# Nouveau formulaire pour l'initialisation NLP
+class NLPInitForm(FlaskForm):
+    """Formulaire d'initialisation du système NLP"""
+    
+    model_selection = SelectField(
+        'Modèle à charger',
+        choices=[],  # Sera rempli dynamiquement
+        validators=[Optional()],
+        description="Laisser vide pour sélection automatique"
+    )
+    
+    colonnes_exclues = TextAreaField(
+        'Colonnes à exclure (optionnel)',
+        validators=[Optional()],
+        render_kw={"rows": 2, "placeholder": "Ex: id, code_postal, created_at"},
+        description="Colonnes à exclure du corpus, séparées par des virgules"
+    )
+    
+    submit = SubmitField('Initialiser NLP')

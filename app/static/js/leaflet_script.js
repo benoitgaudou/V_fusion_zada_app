@@ -364,6 +364,82 @@ class ZADAMapManager {
         this.hideStatus();
         this.currentThematicField = null;
     }
+
+
+
+
+//NLP
+
+// Méthode pour afficher les résultats NLP
+displayNLPResults(results, mapId = 'nlpMap') {
+    const map = this.maps.get(mapId);
+    if (!map || !results.features) return;
+    
+    // Supprimer la couche précédente
+    if (this.layers.has('nlp-results')) {
+        const oldLayer = this.layers.get('nlp-results');
+        map.removeLayer(oldLayer);
+    }
+    
+    // Créer la nouvelle couche
+    const nlpLayer = L.geoJSON(results.features, {
+        style: this.getNLPStyle.bind(this),
+        onEachFeature: this.getNLPPopup.bind(this)
+    });
+    
+    map.addLayer(nlpLayer);
+    this.layers.set('nlp-results', nlpLayer);
+    
+    // Ajuster la vue
+    if (nlpLayer.getBounds().isValid()) {
+        map.fitBounds(nlpLayer.getBounds(), { padding: [20, 20] });
+    }
+}
+
+// Style pour les résultats NLP
+getNLPStyle(feature) {
+    const similarity = feature.properties?.nlp_similarity || 0.5;
+    let color;
+    
+    if (similarity > 0.8) {
+        color = '#e74c3c';  // Rouge fort
+    } else if (similarity > 0.6) {
+        color = '#f39c12';  // Orange
+    } else if (similarity > 0.4) {
+        color = '#f1c40f';  // Jaune
+    } else {
+        color = '#3498db';  // Bleu
+    }
+    
+    return {
+        color: color,
+        fillColor: color,
+        fillOpacity: 0.6,
+        weight: 2,
+        opacity: 0.9
+    };
+}
+
+// Popup pour les résultats NLP
+getNLPPopup(feature, layer) {
+    if (!feature?.properties) return;
+    
+    const props = feature.properties;
+    const similarity = (props.nlp_similarity * 100).toFixed(1);
+    
+    const html = `
+        <div class="nlp-popup">
+            <h6><i class="fas fa-brain me-1"></i><strong>Résultat NLP</strong></h6>
+            <table class="table table-sm table-borderless mb-0">
+                <tr><td><strong>Rang:</strong></td><td>#${props.nlp_rank}</td></tr>
+                <tr><td><strong>Similarité:</strong></td><td>${similarity}%</td></tr>
+                <tr><td><strong>Contenu:</strong></td><td>${props.nlp_content_preview}</td></tr>
+            </table>
+        </div>
+    `;
+    
+    layer.bindPopup(html, { maxWidth: 300, className: 'nlp-popup' });
+}
 }
 
 // ------------------------ Styles intégrés minimes ------------------------
@@ -435,3 +511,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Expose minimal utils si besoin
 window.zadaMapManager = () => zadaMapManager;
+
+
+

@@ -68,7 +68,7 @@ class FileLoader:
                 # Harmonise CRS → sortie
                 gdf = self._ensure_output_crs(gdf)
                 results.append((gdf, stem))
-                logger.info("✓ [%d] %s : %d entités | CRS=%s", idx, stem, len(gdf), gdf.crs)
+                logger.info(" [%d] %s : %d entités | CRS=%s", idx, stem, len(gdf), gdf.crs)
             except Exception as exc:
                 msg = f"[{idx}] {getattr(f, 'filename', str(f))}: {exc}"
                 logger.exception(msg)
