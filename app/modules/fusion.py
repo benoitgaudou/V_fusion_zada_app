@@ -9,7 +9,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple, Dict, Any
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, base as shapely_base
-from shapely.ops import unary_union, snap
+from shapely.ops import unary_union
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -44,48 +44,40 @@ class ZadaMerger:
 			try:
 				gdf = gpd.read_file(path)
 				if gdf.crs is None:
-					logger.warning(f"Le fichier {path.name} n'a pas de CRS. On suppose {self.config.input_crs_fallback}.")
+					logger.warning(
+						"Le fichier %s n'a pas de CRS. On suppose %s.",
+						path.name, self.config.input_crs_fallback
+					)
 					gdf = gdf.set_crs(self.config.input_crs_fallback, allow_override=True)
-
-				gdf = gdf.to_crs(self.config.metric_crs)  # Passage en CRS métrique pour nettoyage et overlay
+				elif gdf.crs.to_string() != self.config.output_crs:
+					gdf = gdf.to_crs(self.config.output_crs)
 
 				gdf = gdf[gdf.geometry.notna()]
-				gdf["geometry"] = gdf["geometry"].buffer(0)
-				gdf["geometry"] = gdf.geometry.apply(lambda g: snap(g, g, tolerance=1e-5))
-				gdf["geometry"] = gdf["geometry"].buffer(0)
-				gdf["geometry"] = gdf.geometry.simplify(tolerance=1.0, preserve_topology=True)
+				gdf["geometry"] = gdf["geometry"].apply(self._clean_geometry)
 				gdf = gdf[gdf.geometry.notna()]
 
-				gdf["geometry"] = gdf.geometry.simplify(tolerance=1e-3, preserve_topology=True)
 				gdf["original_source_id"] = idx
 				gdf["original_source_name"] = path.stem
 
 				self._sources.append(gdf)
-				logger.info(f"Chargé: {path.name} ({len(gdf)} entités, CRS={gdf.crs})")
+				logger.info("Chargé: %s (%d entités, CRS=%s)", path.name, len(gdf), gdf.crs)
 			except Exception as exc:
-				logger.error(f"Erreur de chargement {path}: {exc}")
+				logger.error("Erreur de chargement %s: %s", path, exc)
 
 		if len(self._sources) < 2:
 			raise ValueError("Au moins deux sources sont nécessaires pour la fusion.")
 
 		self._sources, self._column_analysis = self._harmonize_columns_keep_all(self._sources)
 
-
-	def merge(self) -> gpd.GeoDataFrame:
+	def merge_union_iterative(self) -> gpd.GeoDataFrame:
 		if len(self._sources) < 2:
 			raise ValueError("Au moins deux sources sont nécessaires pour la fusion.")
-
+		
 		gdf_merged = self._sources[0].copy()
-		gdf_merged = gdf_merged.explode(index_parts=False).reset_index(drop=True)
-
+		
 		for idx in range(1, len(self._sources)):
 			gdf_next = self._sources[idx].copy()
-			gdf_next = gdf_next.explode(index_parts=False).reset_index(drop=True)
 			logger.info(f"Fusion union itérative: couche 0 avec couche {idx}")
-
-			common_cols = set(gdf_merged.columns).intersection(set(gdf_next.columns)) - {"geometry"}
-			gdf_next = gdf_next.drop(columns=common_cols)
-
 			try:
 				gdf_merged = gpd.overlay(gdf_merged, gdf_next, how="union")
 				gdf_merged["geometry"] = gdf_merged["geometry"].buffer(0)
@@ -93,36 +85,28 @@ class ZadaMerger:
 			except Exception as exc:
 				logger.error(f"Erreur lors de l'overlay union entre couches : {exc}")
 				raise exc
-
-		# Reprojeter vers output CRS (WGS84)
-		gdf_merged = gdf_merged.to_crs(self.config.output_crs)
-
 		if self.config.area_threshold_m2 > 0:
 			gdf_merged = self._metric_filter(gdf_merged, self.config.area_threshold_m2)
-
 		gdf_merged["source"] = "fused_union"
-		logger.info(f"Fusion terminée: {len(gdf_merged)} entités atomiques.")
+		logger.info(f"Fusion union itérative terminée: {len(gdf_merged)} entités atomiques.")
 		return gdf_merged
 
 	@staticmethod
-	def _clean_geometry(geom: Optional[shapely_base.BaseGeometry], tolerance=1e-5) -> Optional[shapely_base.BaseGeometry]:
+	def _clean_geometry(geom: Optional[shapely_base.BaseGeometry]) -> Optional[shapely_base.BaseGeometry]:
 		if geom is None or geom.is_empty:
 			return None
 		try:
 			if not geom.is_valid:
 				geom = geom.buffer(0)
-			if not geom.is_valid:
-				geom = snap(geom, geom, tolerance=tolerance)
-				geom = geom.buffer(0)
+			if isinstance(geom, (Polygon, MultiPolygon)):
+				return geom
 			if isinstance(geom, GeometryCollection):
 				polys = [g for g in geom.geoms if isinstance(g, (Polygon, MultiPolygon))]
 				if not polys:
 					return None
-				geom = MultiPolygon(polys) if len(polys) > 1 else polys[0]
-			return geom
+				return MultiPolygon(polys) if len(polys) > 1 else polys[0]
 		except Exception:
 			return None
-
 
 	def _analyze_columns(
 		self, geo_dfs: Sequence[gpd.GeoDataFrame]
