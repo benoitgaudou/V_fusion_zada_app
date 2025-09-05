@@ -51,7 +51,7 @@ def _concat_dedup(values, sep=", "):
 @dataclass
 class AutoAlignCfg:
     fuzzy_threshold: float = 84.0        # RapidFuzz token_set_ratio (0-100)
-    use_embeddings: bool = False         # True si vous installez sentence-transformers
+    use_embeddings: bool = True          # True si vous installez sentence-transformers
     emb_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     emb_threshold: float = 0.78          # cosine
     join_sep: str = ", "

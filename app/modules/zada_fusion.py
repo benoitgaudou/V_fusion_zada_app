@@ -125,21 +125,6 @@ class ZadaMerger:
         if len(self._sources) < 2:
             raise ValueError("Au moins deux sources sont nécessaires pour la fusion.")
 
-        # 1. Harmonisation (ici: conservation de toutes colonnes)
-        # self._sources, self._column_analysis = self._harmonize_columns_keep_all(self._sources), Je viens de commenter cette ligne pour utiliser l'harmonisation par NLP
-        # aligner = ColumnAutoAligner(AutoAlignCfg(
-        #     fuzzy_threshold=84.0,        # 78 = plus tolérant, 88 = plus strict
-        #     use_embeddings=False,        # True si vous avez sentence-transformers + torch
-        #     emb_threshold=0.78,
-        #     join_sep=", ",
-        #     save_mapping_json="out/col_mapping.json",
-        #     load_mapping_json=None,      # ou "out/col_mapping.json" pour réappliquer un mapping validé
-        #     auto_grow=True               # apprend les nouvelles colonnes lors des prochains runs
-        # ))
-        # self._sources, self._column_analysis = aligner.transform(self._sources)
-        # logger.info("Auto-NLP: %d groupes → ex: %s",
-        #             len(self._column_analysis.get('groups', {})),
-        #             list(self._column_analysis.get('groups', {}).keys())[:10])
         
         #2.  nouveau : harmonisation NLP auto (sans dictionnaire)
         aligner = ColumnAutoAligner(AutoAlignCfg(
@@ -398,6 +383,8 @@ class ZadaMerger:
     # --------------------------------------------------------------------- #
     # Intersections & Différences
     # --------------------------------------------------------------------- #
+    
+        
     def _compute_pairwise_intersections(
         self, geo_dfs: Sequence[gpd.GeoDataFrame]
     ) -> List[gpd.GeoDataFrame]:

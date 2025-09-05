@@ -13,7 +13,7 @@ class Config:
     # Dossiers
     BASE_DIR = Path(__file__).parent.parent
     UPLOAD_FOLDER = BASE_DIR / 'uploads'
-    STAGE_FOLDER = BASE_DIR / 'stage_geojson'   # ← ajouté
+    STAGE_FOLDER = BASE_DIR / 'stage_geojson'
     RESULTS_FOLDER = BASE_DIR / 'results'
 
     # Fichiers

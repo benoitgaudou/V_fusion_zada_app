@@ -17,7 +17,7 @@ def build_corpus_from_fusion_gdf(
     exclude_exact = exclude_exact or {
         "geometry", "original_source_id", "Original_source_id",
         "original_source_name", "Original_source_name",
-        "intersection_type", "type", "sources", "source_names", "id"
+        "intersection_type", "type", "sources", "source_names", "id", 'nan','non',
     }
     pats = exclude_patterns or ["nom*", "id*", "source*", "original*", "intersection*"]
 

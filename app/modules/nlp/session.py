@@ -12,53 +12,111 @@ from flask import current_app
 from .utils import tokens_from_corpus, legend_from_scores
 from .corpus import build_corpus_from_fusion_gdf
 
+try:
+    from sentence_transformers import SentenceTransformer
+    _HAS_ST = True
+except Exception:
+    _HAS_ST = False
+
+
 class NLPEngine:
-    _kv: Optional[KeyedVectors] = None  # cache modèle partagé
+    """Moteur NLP avec double backend (Word2Vec et optionnellement Sentence-Transformers)
+       - 'sentence_transformers' : paraphrase-multilingual-MiniLM-L12-v2
+       - 'word2vec'              : modèle Word2Vec (taille variable)
+    """
+    _kv: Optional[KeyedVectors] = None                # cache W2V partagé
+    _st_model: Optional["SentenceTransformer"] = None # cache ST partagé
 
     def __init__(self):
         self.is_ready = False
         self.corpus_gdf: Optional[gpd.GeoDataFrame] = None
         self.doc_embeddings: Optional[np.ndarray] = None
         self.current_model_name: str = "N/A"
+        self.backend: str = self._pick_backend()
 
-    #Lister les modèles disponibles
+    # ----------------- Choix du backend -----------------
+    def _pick_backend(self) -> str:
+        """Choisit le backend selon la config et la dispo des libs."""
+        cfg = None
+        try:
+            cfg = current_app.config.get("NLP_BACKEND", None)
+        except Exception:
+            cfg = None
+            
+        # normalisation robuste
+        if isinstance(cfg, str):
+            cfg = cfg.strip().lower()
+        else:
+            cfg = None
+        
+        # utilisation des alias
+        st_alias = {"sentence_transformers", "st", "transformers", "s-t", "s_t"}
+        w2v_alias = {"modele_word2vec", "w2v", "w2-v", "w_2v", "word_2vec"}
+        
+        if cfg in st_alias:
+            return "sentence_transformers" if _HAS_ST else "word2vec"
+        if cfg in w2v_alias:
+            return "word2vec"
+
+        # Par défaut : ST si dispo, sinon W2V
+        return "sentence_transformers" if _HAS_ST else "word2vec"
+    
+    def set_backend(self, backend: str) -> None:
+        """Permet de forcer le backend (avant init_from_fusion_gdf)."""
+        b = (backend or "").strip().lower()
+        if b in {"word2vec", "word_2vec", "w2v", "w_2v", "w-2v", "modele_word2vec"}:
+            self.backend = "word2vec"
+        elif b in {"sentence_transformers", "sentence-transformers", "st", "s-t", "s_t", "transformers"} and _HAS_ST:
+            self.backend = "sentence_transformers"
+        else:
+            self.backend = "word2vec"  if not _HAS_ST else "sentence_transformers"
+        try:
+            current_app.logger.info(f"NLP backend set to: '{self.backend}'")
+        except Exception:
+            pass
+
+    # ----------------- Lister les modèles dispos -----------------
     @classmethod
     def available_models(cls) -> list[dict]:
-        """_summary_
-
-        Returns:
-            list[dict]: les modèles disponibles
-        """
+        """Retourne les modèles W2V trouvés + l’option ST si installée."""
+        out = []
         try:
             base = Path(current_app.config["NLP_MODEL_PATH"])
+            for p in sorted(list(base.glob("*.model")) + list(base.glob("*.bin"))):
+                out.append({
+                    "key": p.stem,
+                    "name": p.stem,
+                    "file": p.name,
+                    "exists": True,
+                    "path": str(p),
+                })
         except Exception:
-            return []
-        out = []
-        for p in sorted(list(base.glob("*.model")) + list(base.glob("*.bin"))):
+            pass
+
+        if _HAS_ST:
             out.append({
-                "key": p.stem,
-                "name": p.stem,
-                "file": p.name,
+                "key": "paraphrase-multilingual-MiniLM-L12-v2",
+                "name": "paraphrase-multilingual-MiniLM-L12-v2",
+                "file": None,
                 "exists": True,
-                "path": str(p),
+                "path": "huggingface",
             })
         return out
-    
-    # --------- Modèle ---------
+
+    # ----------------- Modèle Word2Vec -----------------
     @classmethod
-    def _load_kv(cls) -> KeyedVectors:
+    def _load_kv(cls) -> Optional[KeyedVectors]:
         if cls._kv is not None:
             return cls._kv
         model_path = Path(current_app.config["NLP_MODEL_PATH"])
-        # On essaie d'abord un Word2Vec .model ; sinon on fabriquera un fallback au besoin.
-        # Si tu as un binaire word2vec (.bin), adapte ici pour KeyedVectors.load_word2vec_format
+        # Essaye d'abord un Word2Vec .model ; sinon on laissera le fallback le fabriquer.
         w2v_files = list(model_path.glob("*.model"))
         if w2v_files:
             w2v = Word2Vec.load(str(w2v_files[0]))
             cls._kv = w2v.wv
         else:
             # placeholder : sera remplacé quand on créera un fallback
-            cls._kv = None  # type: ignore
+            cls._kv = None
         return cls._kv
 
     def _ensure_fallback(self, sentences: list[list[str]], vector_size: int = 50) -> None:
@@ -73,17 +131,68 @@ class NLPEngine:
         self.__class__._kv = w2v.wv
         self.current_model_name = "fallback_model"
 
-    # --------- Initialisation depuis un GDF de fusion ---------
+    # ----------------- Sentence-Transformers -----------------
+    @classmethod
+    def _load_st(cls) -> Optional["SentenceTransformer"]:
+        if not _HAS_ST:
+            return None
+        if cls._st_model is not None:
+            return cls._st_model
+
+        model_name = "paraphrase-multilingual-MiniLM-L12-v2"
+        try:
+            # permet de surcharger via config
+            model_name = current_app.config.get("SENTENCE_TRANSFORMERS_MODEL", model_name)
+        except Exception:
+            pass
+
+        device = "cpu"
+        try:
+            device = current_app.config.get("SENTENCE_TRANSFORMERS_DEVICE", "cpu")
+        except Exception:
+            pass
+
+        from sentence_transformers import SentenceTransformer  # import local safe
+        cls._st_model = SentenceTransformer(model_name, device=device)
+        return cls._st_model
+
+    def _embed_texts_st(self, texts: list[str]) -> np.ndarray:
+        st = self._load_st()
+        if st is None:
+            raise RuntimeError(
+                "Sentence-Transformers indisponible. Installez 'sentence-transformers' et 'torch'."
+            )
+        embs = st.encode(texts, convert_to_numpy=True, normalize_embeddings=False)
+        return embs.astype(np.float32, copy=False)
+
+    # ----------------- Initialisation depuis un GDF de fusion -----------------
     def init_from_fusion_gdf(self, gdf_fusion: gpd.GeoDataFrame) -> Dict[str, Any]:
         self.corpus_gdf = build_corpus_from_fusion_gdf(gdf_fusion)
+
+        # Branche ST : encode tout le corpus directement
+        if self.backend == "sentence_transformers":
+            full_texts = self.corpus_gdf["corpus_texte"].fillna("").tolist()
+            embs = self._embed_texts_st(full_texts)
+            self.doc_embeddings = embs
+            self.is_ready = True
+            self.current_model_name = "paraphrase-multilingual-MiniLM-L12-v2"
+            nonzero = int((np.any(embs, axis=1)).sum())
+            return {
+                "success": True,
+                "documents": nonzero,
+                "dimension": int(embs.shape[1]),
+                "model": self.current_model_name
+            }
+
+        # Branche Word2Vec (ta logique d’origine)
         docs = [t for t in self.corpus_gdf["corpus_texte"].tolist() if t != "corpus_vide"]
         tokenized = [tokens_from_corpus(t) for t in docs if t]
 
         kv = self._load_kv()
         if kv is None:
             self._ensure_fallback(tokenized)
+            kv = self._load_kv()  # sûr d’être non-None maintenant
 
-        kv = self._load_kv()  # sûr d’être non-None maintenant
         embs = np.zeros((len(self.corpus_gdf), kv.vector_size), dtype=np.float32)
         for i, txt in enumerate(self.corpus_gdf["corpus_texte"].fillna("")):
             toks = tokens_from_corpus(txt)
@@ -102,16 +211,22 @@ class NLPEngine:
             "model": self.current_model_name
         }
 
-    # --------- Recherche ---------
-    def search(self, query: str, top_k: int = 20) -> pd.DataFrame:
+    # ----------------- Recherche -----------------
+    def search(self, query: str, top_k: int = 50) -> pd.DataFrame:
         if not self.is_ready or self.corpus_gdf is None or self.doc_embeddings is None:
             return pd.DataFrame()
-        kv = self._load_kv()
-        toks = tokens_from_corpus(query)
-        vecs = [kv[w] for w in toks if w in kv]
-        if not vecs:
-            return pd.DataFrame()
-        qv = np.mean(vecs, axis=0).reshape(1, -1)
+
+        # Embedding de la requête selon le backend
+        if self.backend == "sentence_transformers":
+            qv = self._embed_texts_st([query])  # (1, d)
+        else:
+            kv = self._load_kv()
+            toks = tokens_from_corpus(query)
+            vecs = [kv[w] for w in toks if kv is not None and w in kv]
+            if not vecs:
+                return pd.DataFrame()
+            qv = np.mean(vecs, axis=0, dtype=np.float32).reshape(1, -1)
+
         sims = cosine_similarity(qv, self.doc_embeddings)[0]
         idx = np.argsort(sims)[::-1][:top_k]
         return pd.DataFrame({
@@ -120,12 +235,12 @@ class NLPEngine:
             "similarite": sims[idx]
         })
 
-    # --------- Sortie GeoJSON ---------
+    # ----------------- Sortie GeoJSON -----------------
     def to_geojson(self, df: pd.DataFrame):
         if df.empty or self.corpus_gdf is None:
-            return {"type":"FeatureCollection","features":[]}, {"type":"continuous","items":[]}, None
+            return {"type": "FeatureCollection", "features": []}, {"type": "continuous", "items": []}, None
 
-        sel = self.corpus_gdf.iloc[df["row_idx"]][["id_zone","corpus_texte","geometry"]].reset_index(drop=True)
+        sel = self.corpus_gdf.iloc[df["row_idx"]][["id_zone", "corpus_texte", "geometry"]].reset_index(drop=True)
         sel["similarite"] = df["similarite"].to_numpy()
         legend = legend_from_scores(sel["similarite"].to_numpy(), classes=6)
 
@@ -135,8 +250,8 @@ class NLPEngine:
         colors = [it["color"] for it in items]
 
         def color_for(v: float) -> str:
-            for i in range(len(bounds)-1):
-                if bounds[i] <= v <= bounds[i+1]:
+            for i in range(len(bounds) - 1):
+                if bounds[i] <= v <= bounds[i + 1]:
                     return colors[i]
             return colors[-1]
 
@@ -151,18 +266,22 @@ class NLPEngine:
                 "style": {"fillColor": col, "color": col, "fillOpacity": 0.7, "weight": 2, "opacity": 0.9},
                 "thematic_field": "similarite",
                 "thematic_value": f"{float(r['similarite']):.3f}",
+                # meta utiles pour debug/UI
+                "nlp_backend": self.backend,
+                "nlp_model": self.current_model_name,
             }
             gj = json.loads(gpd.GeoSeries([r.geometry], crs="EPSG:4326").to_json())["features"][0]["geometry"]
-            feats.append({"type":"Feature","properties":props,"geometry":gj})
+            feats.append({"type": "Feature", "properties": props, "geometry": gj})
 
         tb = self.corpus_gdf.total_bounds
         leaflet_bounds = [[tb[1], tb[0]], [tb[3], tb[2]]]
-        return {"type":"FeatureCollection","features":feats}, legend, leaflet_bounds
+        return {"type": "FeatureCollection", "features": feats}, legend, leaflet_bounds
 
-    # --------- Statut ---------
+    # ----------------- Statut -----------------
     def stats(self) -> Dict[str, Any]:
         return {
             "ready": self.is_ready,
             "doc_count": int(self.corpus_gdf.shape[0]) if self.corpus_gdf is not None else 0,
-            "model": self.current_model_name
+            "model": self.current_model_name,
+            "backend": self.backend,
         }
