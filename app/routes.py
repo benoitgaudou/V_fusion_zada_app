@@ -252,18 +252,29 @@ def api_fields_analysis():
     try:
         gdf = gpd.read_file(meta['export_path'])
         fields = []
+        
         for col in _non_tech_columns(gdf):
             s = gdf[col]
             dtype = 'numeric' if pd.api.types.is_numeric_dtype(s) else 'categorical'
             sample = list(s.dropna().unique()[:5])
+            unique_count = s.nunique(dropna=True)
+            
+            # Appel correct de la méthode statique
+            #sample = ZadaMerger._convert_numpy_types(sample)
+            #unique_count = ZadaMerger._convert_numpy_types(unique_count)
+            # Utilisation de l'ancien algorithme juste l'intersection par pair et la différence en commentant les deux lignes d'avant
+            
+            
             fields.append({
                 'name': col,
                 'label': col.replace('_', ' ').title(),
                 'type': dtype,
-                'unique_count': int(s.nunique(dropna=True)),
+                'unique_count': int(unique_count),
                 'sample_values': sample
             })
+        
         return jsonify({'success': True, 'fields': fields})
+    
     except Exception as e:
         logger.exception("Erreur /api/fields-analysis")
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -384,6 +395,8 @@ def api_export_thematic_map(field_name):
 
 from app.modules.nlp import nlp_engine
 from app.modules.nlp.api import init_from_fusion_export, semantic_search
+from app.modules.nlp.api import _get_engine
+
 
 @main_bp.route('/nlp_query', methods=['GET'])
 def nlp_query():
@@ -398,11 +411,16 @@ def api_nlp_init():
     meta = session.get('fusion_result_metadata')
     if not meta or not meta.get('export_path'):
         return jsonify({'success': False, 'error': "Aucun résultat de fusion en session."}), 400
+
+    data = request.get_json(silent=True) or request.form
+    backend = (data.get('backend') or '').strip().lower()
     try:
-        return jsonify(init_from_fusion_export(meta['export_path']))
+        return jsonify(init_from_fusion_export(meta['export_path'], backend=backend if backend else None))
     except Exception as e:
         current_app.logger.exception("api_nlp_init")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
 
 @main_bp.route('/api/nlp/search', methods=['POST'])
 def api_nlp_search():
@@ -434,7 +452,12 @@ def api_nlp_models():
 @main_bp.route('/api/nlp/status', methods=['GET'])
 def api_nlp_status():
     try:
-        st = nlp_engine.stats()
+        meta = session.get('fusion_result_metadata')
+        if not meta or not meta.get('export_path'):
+            return jsonify({'success': False, 'error': "Aucun export_path en session."}), 400
+
+        eng = _get_engine(meta['export_path'])  # Récupérer l’instance correcte
+        st = eng.stats()  # Statut du moteur correct
         return jsonify({"success": True, "ready": st.get("ready", False), "stats": st})
     except Exception as e:
         current_app.logger.exception("api_nlp_status")

@@ -9,6 +9,8 @@ class Config:
 
     # Flask
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'your-secret-key-here'
+    
+    NLP_BACKEND = "sentence_transformers"  # ou "sentence_transformers" selon choix par défaut
 
     # Dossiers
     BASE_DIR = Path(__file__).parent.parent

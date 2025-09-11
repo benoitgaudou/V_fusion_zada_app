@@ -78,7 +78,7 @@ def test_zada_corrected():
     
     try:
         # Importer les modules corrigés
-        from app.modules.zada_fusionC import ZadaMerger, MergeConfig
+        from app.modules.zada_fusion import ZadaMerger, MergeConfig
         
         # Créer les données de test
         gdfs = create_test_data()

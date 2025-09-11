@@ -2,7 +2,7 @@
 import logging
 from pathlib import Path
 from app.modules.file_loader import FileLoader, FileLoaderConfig
-from app.modules.zada_fusionC import ZadaMerger, MergeConfig
+from app.modules.zada_fusion import ZadaMerger, MergeConfig
 
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Tuple, List

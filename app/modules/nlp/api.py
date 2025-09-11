@@ -15,23 +15,30 @@ def _get_engine(export_path: str) -> NLPEngine:
         _ENGINES[key] = NLPEngine()
     return _ENGINES[key]
 
-def init_from_fusion_export(export_path: str) -> Dict[str, Any]:
-    """
-    Charge le GeoJSON de fusion, initialise (ou ré-initialise) un moteur NLP
-    associé à ce fichier, et renvoie quelques infos.
-    """
+def init_from_fusion_export(export_path: str, backend: str | None = None) -> Dict[str, Any]:
+    import flask
     gdf = gpd.read_file(export_path)
     eng = _get_engine(export_path)
-    info = eng.init_from_fusion_gdf(gdf)
 
-    # info contient déjà: success, documents, dimension, model
-    # on harmonise avec ce que le front attend
+    if backend:
+        eng.set_backend(backend)
+    else:
+        try:
+            config_backend = flask.current_app.config.get("NLP_BACKEND")
+            if config_backend:
+                eng.set_backend(config_backend)
+        except Exception:
+            pass
+
+    info = eng.init_from_fusion_gdf(gdf)
     return {
         "success": True,
         "documents_count": int(info.get("documents", 0)),
         "embedding_dim": int(info.get("dimension", 0)),
         "model_used": info.get("model", "inconnu"),
     }
+
+
 
 def semantic_search(export_path: str, query: str, top_k: int = 10) -> Dict[str, Any]:
     """

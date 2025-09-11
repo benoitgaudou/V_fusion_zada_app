@@ -21,8 +21,10 @@
                 <form id="nlpInitForm">
                     <div class="mb-3">
                         <label for="model_selection" class="form-label">Modèle NLP</label>
-                        <select id="model_selection" name="model_selection" class="form-control">
+                        <select id="model_selection" name="backend" class="form-control">
                             <option value="">Automatique</option>
+                            <option value="word2vec">Word2Vec</option>
+                            <option value="sentence_transformers">Sentence Transformers</option>
                         </select>
                         <div class="form-text">Le système choisira le meilleur modèle disponible</div>
                     </div>
@@ -33,7 +35,6 @@
                                   placeholder="Ex: id, code_postal, created_at"></textarea>
                         <div class="form-text">Colonnes à exclure du corpus, séparées par des virgules</div>
                     </div>
-                    
                     <div class="d-grid">
                         <button type="submit" class="btn btn-warning" id="initBtn">
                             <i class="fas fa-cogs me-2"></i>Initialiser NLP
@@ -130,6 +131,8 @@
                         <small><i class="fas fa-water me-2"></i>terrains inondables</small>
                     </a>
                 </div>
+                <button id="resetNLPBtn" class="btn btn-secondary mt-3">Changer de modèle NLP</button>
+                <p id="currentBackendDisplay" class="mt-2 fst-italic text-muted">Backend NLP actif : non initialisé</p>
             </div>
         </div>
     </div>
@@ -201,6 +204,24 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+
+function updateBackendDisplay() {
+    fetch('/api/nlp/status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.stats) {
+                const backendName = data.stats.backend || 'inconnu';
+                const modelUsed = data.stats.model || 'inconnu';
+                const el = document.getElementById('currentBackendDisplay');
+                if (el) {
+                    el.textContent = `Backend NLP actif: ${backendName}, Modèle : ${modelUsed}`;
+                }
+            }
+        })
+        .catch(e => console.error('Erreur mise à jour backend:', e));
+}
+
+
 function checkNLPStatus() {
     fetch('/api/nlp/status')
         .then(response => response.json())
@@ -251,16 +272,26 @@ function loadAvailableModels() {
 function handleNLPInit(e) {
     e.preventDefault();
     
-    const formData = new FormData(e.target);
+    const form = e.target;
+    const select = form.querySelector('select[name="backend"]');
+    const backend = select ? select.value : "";
+
+    const colonnes = form.querySelector('textarea[name="colonnes_exclues"]').value.trim();
+
+    // Préparer l'objet JSON
+    const payload = {
+        backend: backend,
+        colonnes_exclues: colonnes
+    };
+
     const initBtn = document.getElementById('initBtn');
-    
-    // UI loading
     initBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Initialisation...';
     initBtn.disabled = true;
-    
+
     fetch('/api/nlp/init', {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
     })
     .then(response => response.json())
     .then(data => {
@@ -268,10 +299,12 @@ function handleNLPInit(e) {
             nlpReady = true;
             updateUI();
             showAlert('success', `NLP initialisé avec succès! Modèle: ${data.model_used}`);
+            updateBackendDisplay();  // Ajout pour mise à jour UI
         } else {
             showAlert('danger', data.error || 'Erreur lors de l\'initialisation');
         }
     })
+
     .catch(error => {
         console.error('Erreur init:', error);
         showAlert('danger', 'Erreur de communication');
@@ -437,6 +470,10 @@ function showNLPLoading(show) {
 function hideDefaultMessage() {
     document.getElementById('defaultMessage').style.display = 'none';
 }
+  document.getElementById('resetNLPBtn').addEventListener('click', function() {
+    nlpReady = false;
+    updateUI();
+  });
 
 function showAlert(type, message) {
     const alertDiv = document.createElement('div');

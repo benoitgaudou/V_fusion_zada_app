@@ -153,7 +153,7 @@ class ZadaMerger:
         geopandas.GeoDataFrame
             Résultat final en `config.output_crs`.
         """
-        intersections = self._compute_pairwise_intersections(self._sources)
+        intersections = self._compute_multi_source_intersections(self._sources)
         differences = self._compute_differences(self._sources, intersections)
 
         all_parts: List[gpd.GeoDataFrame] = intersections + differences
@@ -379,41 +379,160 @@ class ZadaMerger:
             "colonnes_conflictuelles": analysis["conflictuelles"],
             "toutes_colonnes": True,
         }
-
+    @staticmethod
+    def _convert_numpy_types(obj):
+        """
+        Convertit les types numpy en types Python natifs pour la sérialisation JSON.
+        """
+        import numpy as np
+        import pandas as pd
+        
+        if isinstance(obj, (np.integer, np.int32, np.int64, np.int8, np.int16)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float32, np.float64, np.float16)):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, pd.Series):
+            return obj.tolist()
+        elif hasattr(obj, 'item'):  # autres types numpy scalaires
+            return obj.item()
+        elif isinstance(obj, dict):
+            return {k: ZadaMerger._convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [ZadaMerger._convert_numpy_types(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(ZadaMerger._convert_numpy_types(item) for item in obj)
+        else:
+            return obj
     # --------------------------------------------------------------------- #
     # Intersections & Différences
     # --------------------------------------------------------------------- #
-          
-    def _compute_pairwise_intersections(
+
+    def _compute_multi_source_intersections(
         self, geo_dfs: Sequence[gpd.GeoDataFrame]
     ) -> List[gpd.GeoDataFrame]:
-        """Intersections par paires avec conservation des attributs."""
-        logger.info("=== PHASE 2: INTERSECTIONS ===")
+        """Calcule toutes les intersections multi-sources sans duplication."""
+        logger.info("=== PHASE 2: INTERSECTIONS MULTI-SOURCES ===")
         results: List[gpd.GeoDataFrame] = []
         n = len(geo_dfs)
-
+        
+        # Préparer des dataframes simplifiés pour éviter les conflits de colonnes
+        simple_dfs = []
+        for i, gdf in enumerate(geo_dfs):
+            # Créer un dataframe minimal avec seulement les colonnes essentielles
+            simple_gdf = gpd.GeoDataFrame({
+                'geometry': gdf.geometry,
+                'original_source_name': gdf['original_source_name'],
+                'source_index': i  # Ajouter un index de source
+            }, crs=gdf.crs)
+            simple_dfs.append(simple_gdf)
+        
+        from itertools import combinations
+        
+        # Pour gérer les intersections multiples, nous allons utiliser une approche différente
+        # qui évite les problèmes de superposition en calculant les intersections de manière hiérarchique
+        
+        # D'abord, calculer toutes les intersections par paires
+        pairwise_intersections = {}
+        
         for i in range(n):
             for j in range(i + 1, n):
-                gdf1, gdf2 = geo_dfs[i], geo_dfs[j]
+                gdf1, gdf2 = simple_dfs[i], simple_dfs[j]
                 name1 = str(gdf1["original_source_name"].iloc[0])
                 name2 = str(gdf2["original_source_name"].iloc[0])
-                logger.info("Intersection %s ↔ %s", name1, name2)
-
+                
                 try:
-                    inter = gpd.overlay(gdf1, gdf2, how="intersection")
-                    if inter.empty:
-                        logger.info("Aucune intersection trouvée.")
-                        continue
-
-                    inter["type"] = "intersection"
-                    inter["sources"] = f"{i}+{j}"
-                    inter["source_names"] = f"{name1}+{name2}"
-                    results.append(inter)
-                    logger.info("→ %d intersections", len(inter))
+                    # Renommer les colonnes pour éviter les conflits
+                    gdf1_clean = gdf1.rename(columns={
+                        'original_source_name': 'source_name_1',
+                        'source_index': 'source_index_1'
+                    })
+                    gdf2_clean = gdf2.rename(columns={
+                        'original_source_name': 'source_name_2',
+                        'source_index': 'source_index_2'
+                    })
+                    
+                    # Calculer l'intersection
+                    inter = gpd.overlay(gdf1_clean, gdf2_clean, how="intersection")
+                    
+                    if not inter.empty:
+                        # Stocker pour utilisation ultérieure
+                        key = f"{i}+{j}"
+                        pairwise_intersections[key] = inter
+                        
+                        # Ajouter aux résultats
+                        inter = inter.copy()
+                        inter["type"] = "intersection"
+                        inter["sources"] = key
+                        inter["source_names"] = f"{name1}+{name2}"
+                        inter["intersection_level"] = 2
+                        
+                        # Garder seulement les colonnes standardisées
+                        final_cols = ['geometry', 'type', 'sources', 'source_names', 'intersection_level']
+                        inter = inter[[col for col in final_cols if col in inter.columns]].copy()
+                        
+                        results.append(inter)
+                        logger.info("Intersection %s ↔ %s: %d intersections", name1, name2, len(inter))
+                    
                 except Exception as exc:
                     logger.error("Erreur intersection %d-%d: %s", i, j, exc)
-                    logger.debug("Colonnes GDF1: %s", list(gdf1.columns))
-                    logger.debug("Colonnes GDF2: %s", list(gdf2.columns))
+        
+        # Maintenant, pour les intersections de niveau supérieur (3+ sources),
+        # nous allons les calculer de manière incrémentielle
+        if n >= 3:
+            # Pour chaque combinaison de 3 sources ou plus
+            for k in range(3, n + 1):
+                for source_indices in combinations(range(n), k):
+                    source_names = [str(simple_dfs[i]["original_source_name"].iloc[0]) for i in source_indices]
+                    logger.info("Traitement intersection %d sources: %s", k, "+".join(source_names))
+                    
+                    try:
+                        # Construire l'intersection progressive à partir des intersections par paires
+                        current_geom = None
+                        
+                        # Commencer par l'intersection des deux premières sources
+                        key1 = f"{source_indices[0]}+{source_indices[1]}"
+                        if key1 in pairwise_intersections:
+                            current_geom = unary_union(pairwise_intersections[key1].geometry)
+                        
+                        # Ajouter progressivement les autres sources
+                        for i in range(2, k):
+                            if current_geom is None:
+                                break
+                                
+                            # Vérifier s'il existe une intersection avec cette source
+                            found_intersection = False
+                            for j in range(i):
+                                key = f"{source_indices[j]}+{source_indices[i]}"
+                                if key in pairwise_intersections:
+                                    new_geom = unary_union(pairwise_intersections[key].geometry)
+                                    current_geom = current_geom.intersection(new_geom)
+                                    found_intersection = True
+                                    break
+                            
+                            if not found_intersection or current_geom.is_empty:
+                                current_geom = None
+                                break
+                        
+                        if current_geom is not None and not current_geom.is_empty:
+                            # Créer le GeoDataFrame pour cette intersection multiple
+                            inter_gdf = gpd.GeoDataFrame({
+                                'geometry': [current_geom],
+                                'type': 'intersection',
+                                'sources': '+'.join(map(str, source_indices)),
+                                'source_names': '+'.join(source_names),
+                                'intersection_level': k
+                            }, crs=simple_dfs[0].crs)
+                            
+                            results.append(inter_gdf)
+                            logger.info("→ Intersection %d sources: 1 zone", k)
+                    
+                    except Exception as exc:
+                        logger.error("Erreur intersection %s: %s", "+".join(map(str, source_indices)), exc)
+        
         return results
 
     def _compute_differences(
@@ -421,34 +540,85 @@ class ZadaMerger:
         geo_dfs: Sequence[gpd.GeoDataFrame],
         intersections: Sequence[gpd.GeoDataFrame],
     ) -> List[gpd.GeoDataFrame]:
-        """Soustraction des intersections pour obtenir les zones uniques."""
+        """Soustraction correcte des intersections multiples."""
         logger.info("=== PHASE 3: DIFFÉRENCES ===")
         diffs: List[gpd.GeoDataFrame] = []
 
         if intersections:
-            logger.info("Calcul de l'union des intersections…")
-            all_inter = gpd.GeoDataFrame(
-                pd.concat(intersections, ignore_index=True),
-                crs=geo_dfs[0].crs,
-            )
-            union_geom = unary_union(all_inter.geometry)
-            union_gdf = gpd.GeoDataFrame([{"geometry": union_geom}], crs=geo_dfs[0].crs)
-
-            for i, gdf in enumerate(geo_dfs):
-                name = str(gdf["original_source_name"].iloc[0])
-                logger.info("Différence pour %s…", name)
+            # Créer une union de toutes les géométries d'intersection
+            all_geoms = []
+            for inter in intersections:
+                # Extraire les géométries de manière robuste
+                if hasattr(inter, 'geometry'):
+                    geoms = inter.geometry
+                    for geom in geoms:
+                        if geom is not None and not geom.is_empty:
+                            # Convertir en liste de géométries simples si nécessaire
+                            if isinstance(geom, (MultiPolygon, GeometryCollection)):
+                                all_geoms.extend([g for g in geom.geoms if isinstance(g, (Polygon, MultiPolygon))])
+                            elif isinstance(geom, (Polygon, MultiPolygon)):
+                                all_geoms.append(geom)
+            
+            if all_geoms:
                 try:
-                    diff = gpd.overlay(gdf, union_gdf, how="difference")
-                    if diff.empty:
-                        logger.info("→ Aucune zone unique.")
-                        continue
-                    diff["type"] = "difference"
-                    diff["sources"] = str(i)
-                    diff["source_names"] = name
-                    diffs.append(diff)
-                    logger.info("→ %d zones uniques", len(diff))
+                    # Créer l'union de manière progressive pour éviter les problèmes de forme
+                    if len(all_geoms) == 1:
+                        union_geom = all_geoms[0]
+                    else:
+                        # Utiliser une approche progressive pour éviter les erreurs de forme
+                        union_geom = all_geoms[0]
+                        for geom in all_geoms[1:]:
+                            if geom is not None and not geom.is_empty:
+                                try:
+                                    union_geom = union_geom.union(geom)
+                                except Exception:
+                                    # En cas d'erreur, passer à la géométrie suivante
+                                    continue
+                    
+                    if union_geom.is_empty:
+                        logger.info("Union des intersections vide.")
+                        union_gdf = None
+                    else:
+                        # Créer un GeoDataFrame pour l'union
+                        union_gdf = gpd.GeoDataFrame({'geometry': [union_geom]}, crs=geo_dfs[0].crs)
+                    
+                    if union_gdf is not None:
+                        for i, gdf in enumerate(geo_dfs):
+                            name = str(gdf["original_source_name"].iloc[0])
+                            logger.info("Différence pour %s…", name)
+                            
+                            try:
+                                # Utiliser overlay pour la différence (plus robuste)
+                                diff = gpd.overlay(gdf, union_gdf, how='difference')
+                                
+                                if not diff.empty:
+                                    diff["type"] = "difference"
+                                    diff["sources"] = str(i)
+                                    diff["source_names"] = name
+                                    
+                                    diffs.append(diff)
+                                    logger.info("→ %d zones uniques", len(diff))
+                                else:
+                                    logger.info("→ Aucune zone unique.")
+                                    
+                            except Exception as exc:
+                                logger.error("Erreur différence %d: %s", i, exc)
+                    else:
+                        logger.info("Aucune union valide des intersections.")
+                        
                 except Exception as exc:
-                    logger.error("Erreur différence %d: %s", i, exc)
+                    logger.error("Erreur création union des intersections: %s", exc)
+                    # Fallback: utiliser les sources originales
+                    logger.info("Fallback: utilisation des sources originales")
+                    for i, gdf in enumerate(geo_dfs):
+                        copy = gdf.copy()
+                        name = str(copy["original_source_name"].iloc[0])
+                        copy["type"] = "original"
+                        copy["sources"] = str(i)
+                        copy["source_names"] = name
+                        diffs.append(copy)
+            else:
+                logger.info("Aucune géométrie d'intersection valide.")
         else:
             logger.info("Aucune intersection → conservation des sources originales.")
             for i, gdf in enumerate(geo_dfs):
@@ -458,6 +628,7 @@ class ZadaMerger:
                 copy["sources"] = str(i)
                 copy["source_names"] = name
                 diffs.append(copy)
+        
         return diffs
 
     # --------------------------------------------------------------------- #

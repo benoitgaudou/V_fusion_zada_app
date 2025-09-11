@@ -18,7 +18,7 @@ except Exception:
 try:
     from sentence_transformers import SentenceTransformer
     import numpy as np
-    HAVE_EMB = True
+    HAVE_EMB = True    # Forcer l'utilisation de rappidfuzz en desactivant les embeddings
 except Exception:
     HAVE_EMB = False
 
@@ -51,7 +51,7 @@ def _concat_dedup(values, sep=", "):
 @dataclass
 class AutoAlignCfg:
     fuzzy_threshold: float = 84.0        # RapidFuzz token_set_ratio (0-100)
-    use_embeddings: bool = True          # True si vous installez sentence-transformers
+    use_embeddings: bool = True         # True si vous installez sentence-transformers
     emb_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     emb_threshold: float = 0.78          # cosine
     join_sep: str = ", "
@@ -76,6 +76,9 @@ class ColumnAutoAligner:
         self._emb = None
         self._canon_vecs: Dict[str, "np.ndarray"] = {}
 
+        # Pour forcer l'utilisation de rapidfuzz même si sentence-transformers est installé
+        
+        
         if self.cfg.use_embeddings and HAVE_EMB:
             try:
                 self._emb = SentenceTransformer(self.cfg.emb_model)

@@ -442,6 +442,7 @@ getNLPPopup(feature, layer) {
 }
 }
 
+
 // ------------------------ Styles intégrés minimes ------------------------
 function addThematicStyles() {
     if (document.getElementById('thematic-styles')) return;
