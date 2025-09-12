@@ -104,11 +104,13 @@ class ZADAMapManager {
         const fieldSelect = document.getElementById('thematic-field-select');
         const paletteSelect = document.getElementById('color-palette-select');
         const generateBtn  = document.getElementById('generate-thematic-map');
+        const exportBtn    = document.getElementById('export-thematic-map');
 
         if (!fieldSelect || !paletteSelect || !generateBtn) return;
 
         fieldSelect.addEventListener('change', () => {
             generateBtn.disabled = !fieldSelect.value;
+            if (exportBtn) exportBtn.disabled = true;
             this.hideThematicLegend();
             this.hideStatus();
             this.showFieldPreview(fieldSelect.value);
@@ -217,21 +219,26 @@ class ZADAMapManager {
         fetch(`/api/thematic-map/${encodeURIComponent(field)}?palette=${encodeURIComponent(palette)}`)
             .then(r => r.json())
             .then(data => {
-                if (!data.success) throw new Error(data.error || 'Génération échouée');
+            if (!data.success) throw new Error(data.error || 'Génération échouée');
 
-                this.updateMapWithThematicData(data);
+            this.updateMapWithThematicData(data);
 
-                // Légende
-                if (data.legend) this.displayThematicLegend(data.legend);
+            if (data.legend) this.displayThematicLegend(data.legend);
 
-                // Fit bounds
-                const map = this.maps.get('map');
-                if (map && data.map_bounds) map.fitBounds(data.map_bounds, { padding: [10, 10] });
+            const map = this.maps.get('map');
+            if (map && data.bounds) map.fitBounds(data.bounds, { padding: [10, 10] });
 
-                this.currentThematicField = field;
-                this.showStatus('success', 'Carte thématique générée !');
-                this.injectExportButton(field, palette);
+            this.currentThematicField = field;
+            this.showStatus('success', 'Carte thématique générée !');
+
+            // Active le bouton Export et branche l’action
+            const exportBtn = document.getElementById('export-thematic-map');
+            if (exportBtn) {
+                exportBtn.disabled = false;
+                exportBtn.onclick = () => this.exportThematicMap(field, palette);
+            }
             })
+
             .catch(err => {
                 console.error(err);
                 this.showStatus('danger', `Erreur: ${err.message}`);
@@ -328,30 +335,39 @@ class ZADAMapManager {
     }
 
     exportThematicMap(fieldName, paletteName) {
-        fetch(`/api/export-thematic-map/${encodeURIComponent(fieldName)}?palette=${encodeURIComponent(paletteName)}`)
-            .then(r => r.json())
-            .then(data => {
-                if (!data.success) throw new Error(data.error || 'Export échoué');
-                const a = document.createElement('a');
-                a.href = data.download_url;
-                a.download = data.filename;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                this.showStatus('success', `Fichier exporté: ${data.filename}`);
-            })
-            .catch(err => this.showStatus('danger', `Erreur export: ${err.message}`));
+    const fmtSel = document.getElementById('export-format-select');
+    const fmt = (fmtSel?.value || 'geojson').toLowerCase();
+
+    const msgEl = document.getElementById('mapExportMsg');
+    if (msgEl) { msgEl.textContent = 'Export en cours…'; }
+
+    fetch('/api/map/export', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+        fmt, field_name: fieldName, palette: paletteName, layer: 'zada_thematic'
+        })
+    })
+    .then(async res => {
+        if (!res.ok) {
+        let err = 'HTTP ' + res.status;
+        try { const j = await res.json(); if (j.error) err = j.error; } catch {}
+        throw new Error(err);
+        }
+        const blob = await res.blob();
+        const cd = res.headers.get('Content-Disposition');
+        const fallback = `zada_thematic_${fieldName}_${paletteName}.${fmt === 'shp' ? 'shp.zip' : fmt}`;
+        const filename = filenameFromCD(cd) || fallback;
+        downloadBlob(blob, filename);
+        if (msgEl) { msgEl.textContent = `Export terminé: ${filename}`; }
+        this.showStatus('success', `Fichier exporté: ${filename}`);
+    })
+    .catch(err => {
+        if (msgEl) { msgEl.textContent = `Erreur export: ${err.message}`; }
+        this.showStatus('danger', `Erreur export: ${err.message}`);
+    });
     }
 
-    fitToAllLayers(mapId) {
-        const map = this.maps.get(mapId);
-        const mapLayers = this.layers.get(mapId);
-        if (!map || !mapLayers) return;
-
-        const group = new L.featureGroup();
-        mapLayers.forEach(layer => layer && group.addLayer(layer));
-        if (group.getLayers().length) map.fitBounds(group.getBounds(), { padding: [20, 20] });
-    }
 
     clearLayers(mapId) {
         const map = this.maps.get(mapId);
@@ -366,9 +382,6 @@ class ZADAMapManager {
     }
 
 
-
-
-//NLP
 
 // Méthode pour afficher les résultats NLP
 displayNLPResults(results, mapId = 'nlpMap') {
@@ -442,6 +455,47 @@ getNLPPopup(feature, layer) {
 }
 }
 
+//Fonction d'exportation de cartes NLP 
+
+async function onExportNlp(e) {
+  e.preventDefault();
+  if (!nlpReady) { showAlert('warning', 'Système NLP non initialisé'); return; }
+
+  const q = document.querySelector('[name="query"]').value.trim();
+  const topK = Number(document.getElementById('max_results').value || 10);
+  const fmt = document.getElementById('fmtNlpSelect').value;
+  const msgEl = document.getElementById('nlpExportMsg');
+
+  if (!q) { showAlert('warning', 'Saisissez une requête'); return; }
+
+  const btn = document.getElementById('btnExportNlp');
+  btn.disabled = true; if (msgEl) msgEl.textContent = 'Export en cours…';
+
+  try {
+    const res = await fetch('/api/nlp/export', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ fmt, top_k: topK, query: q })
+    });
+    if (!res.ok) {
+      let err = 'HTTP ' + res.status;
+      try { const j = await res.json(); if (j.error) err = j.error; } catch {}
+      throw new Error(err);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition');
+    const fallback = `zada_nlp_${Date.now()}.${fmt === 'shp' ? 'shp.zip' : fmt}`;
+    const filename = filenameFromCD(cd) || fallback;
+    downloadBlob(blob, filename);
+    if (msgEl) msgEl.textContent = `Export terminé: ${filename}`;
+  } catch (err) {
+    if (msgEl) msgEl.textContent = `Erreur export: ${err.message}`;
+    showAlert('danger', `Erreur export: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 
 // ------------------------ Styles intégrés minimes ------------------------
 function addThematicStyles() {
@@ -497,6 +551,10 @@ document.addEventListener('DOMContentLoaded', () => {
         zadaMapManager.initializeThematicMapping();
     }
 
+    //Ecouteur NLP
+    const btnExp = document.getElementById('btnExportNlp');
+    if (btnExp) btnExp.addEventListener('click', onExportNlp);
+
     // Raccourcis
     document.addEventListener('keydown', (e) => {
         if (e.ctrlKey && e.key === 'r') {
@@ -509,6 +567,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+function filenameFromCD(cd) {
+  if (!cd) return '';
+  const m = /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/i.exec(cd);
+  return decodeURIComponent(m ? (m[1] || m[2]) : '') || '';
+}
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+  a.remove(); URL.revokeObjectURL(url);
+}
 
 // Expose minimal utils si besoin
 window.zadaMapManager = () => zadaMapManager;

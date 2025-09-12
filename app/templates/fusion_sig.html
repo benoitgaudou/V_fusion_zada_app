@@ -29,13 +29,14 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
                 <option value="">Sélectionner un champ...</option>
               </select>
               <div class="form-text">
-                Les champs proviennent du résultat de la fusion effectuée sur la page d’accueil.
+                Les champs proviennent du résultat de la fusion effectuée sur la page d'accueil.
               </div>
             </div>
           </div>
 
           <div class="row mb-3">
-            <div class="col-8">
+            <!-- Palette de couleurs -->
+            <div class="col-md-6 mb-3">
               <label for="color-palette-select" class="form-label">
                 <strong>Palette de couleurs</strong>
               </label>
@@ -50,12 +51,32 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
                 <option value="oranges">Oranges</option>
               </select>
             </div>
-            <div class="col-4 d-flex align-items-end">
+
+            <!-- Bouton Générer -->
+            <div class="col-md-6 mb-3 d-flex align-items-end">
               <button id="generate-thematic-map" class="btn btn-info w-100" disabled>
                 <i class="fas fa-map-marked-alt me-1"></i> Générer
               </button>
             </div>
           </div>
+
+          <!-- Export thématique -->
+          <div class="row mb-3">
+            <div class="col-md-8 mb-2">
+              <label for="export-format-select" class="form-label"><strong>Format d'export</strong></label>
+              <select id="export-format-select" class="form-select">
+                <option value="geojson">GeoJSON</option>
+                <option value="gpkg">GeoPackage</option>
+                <option value="shp">Shapefile (.zip)</option>
+              </select>
+            </div>
+            <div class="col-md-4 mb-2 d-flex align-items-end">
+              <button id="export-thematic-map" class="btn btn-outline-success w-100" disabled>
+                <i class="fas fa-download me-1"></i> Exporter
+              </button>
+            </div>
+          </div>
+          <small id="mapExportMsg" class="text-muted d-block mb-3"></small>
 
           <!-- Aperçu du champ -->
           <div id="field-preview" class="alert alert-light" style="display:none;">
@@ -65,8 +86,9 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
 
           <!-- Statut -->
           <div id="thematic-generation-status" style="display:none;"></div>
+          </div>
         </div>
-      </div>
+
     </div>
 
     {% if loaded_files %}
@@ -94,6 +116,7 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
     </div>
     {% endif %}
   </div>
+
 
   <!-- Colonne droite : carte + légende -->
   <div class="col-lg-8">

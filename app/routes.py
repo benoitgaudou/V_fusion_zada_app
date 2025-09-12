@@ -463,4 +463,147 @@ def api_nlp_status():
         current_app.logger.exception("api_nlp_status")
         return jsonify({"success": False, "error": str(e)}), 500
 
+# Exports génériques (fonctionnemet pour n'importe quel GeoDataFrame)
+from app.modules.nlp.card_exports import (
+    export_from_results,         # pour NLP (df de search -> fichier)
+    export_geojson_bytes,        # pour thématique (GDF -> bytes)
+    export_gpkg_bytes,           # idem
+    export_shapefile_zip,        # idem
+)
 
+# Export NLP 
+@main_bp.route("/api/nlp/export", methods=["POST"])
+def api_nlp_export():
+    """
+    Body JSON:
+    {
+      "fmt": "shp" | "gpkg" | "geojson",
+      "top_k": 100,                 # optionnel
+      "query": "texte",             # optionnel si export direct depuis une requête
+      "rows": [{"row_idx":0,"similarite":0.91}, ...]   # optionnel si déjà calculé côté client
+    }
+    """
+    meta = session.get('fusion_result_metadata')
+    if not meta or not meta.get('export_path'):
+        return jsonify({'success': False, 'error': "Aucun résultat de fusion en session."}), 400
+
+    payload = request.get_json(force=True) or {}
+    fmt = (payload.get("fmt") or "").lower()
+    top_k = int(payload.get("top_k", 100))
+
+    # Récupère le bon moteur NLP lié au fichier en session
+    try:
+        eng = _get_engine(meta['export_path'])
+    except Exception as e:
+        current_app.logger.exception("api_nlp_export/_get_engine")
+        return jsonify({'success': False, 'error': f"Moteur NLP indisponible: {e}"}), 500
+
+    # Construit le DataFrame des résultats
+    if "rows" in payload and payload["rows"]:
+        df = pd.DataFrame(payload["rows"])
+        if df.empty or not {"row_idx", "similarite"}.issubset(df.columns):
+            return jsonify({'success': False, 'error': "rows doit contenir row_idx et similarite."}), 400
+    else:
+        q = (payload.get("query") or "").strip()
+        if not q:
+            return jsonify({'success': False, 'error': "query vide (ou fournissez 'rows')."}), 400
+        df = eng.search(q, top_k=top_k)
+        if df.empty:
+            return jsonify({'success': False, 'error': "Aucun résultat pour la requête."}), 400
+
+    try:
+        data = export_from_results(fmt, eng.corpus_gdf, df, layer="zada_nlp")
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.exception("api_nlp_export/export")
+        return jsonify({'success': False, 'error': f"Erreur export: {e}"}), 500
+
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filenames = {
+        "shp":    f"zada_nlp_{stamp}.shp.zip",
+        "gpkg":   f"zada_nlp_{stamp}.gpkg",
+        "geojson":f"zada_nlp_{stamp}.geojson",
+    }
+    mimes = {
+        "shp":    "application/zip",
+        "gpkg":   "application/geopackage+sqlite3",
+        "geojson":"application/geo+json",
+    }
+    return send_file(
+        io.BytesIO(data),
+        mimetype=mimes.get(fmt, "application/octet-stream"),
+        as_attachment=True,
+        download_name=filenames.get(fmt, f"zada_nlp_{stamp}.bin"),
+    )
+
+
+# Export carte thématique par critère
+@main_bp.route("/api/map/export", methods=["POST"])
+def api_map_export():
+    """
+    Body JSON:
+    {
+      "fmt": "geojson" | "gpkg" | "shp",
+      "field_name": "nom_du_champ",
+      "palette": "default" | "pastel" | "vibrant" | "earth",
+      "layer": "nom_couche_gpkg"   # optionnel (défaut: 'zada_thematic')
+    }
+    """
+    meta = session.get('fusion_result_metadata')
+    if not meta or not meta.get('export_path'):
+        return jsonify({'success': False, 'error': "Aucun résultat de fusion en session."}), 400
+
+    payload = request.get_json(force=True) or {}
+    fmt = (payload.get("fmt") or "").lower()
+    field_name = (payload.get("field_name") or "").strip()
+    palette = (payload.get("palette") or "default").strip()
+    layer = (payload.get("layer") or "zada_thematic").strip()
+
+    if not field_name:
+        return jsonify({'success': False, 'error': "Champ 'field_name' requis."}), 400
+
+    try:
+        gdf_source = gpd.read_file(meta['export_path'])
+        if gdf_source is None or gdf_source.empty:
+            return jsonify({'success': False, 'error': "Carte source vide."}), 400
+        if field_name not in gdf_source.columns:
+            return jsonify({'success': False, 'error': f"Champ '{field_name}' introuvable"}), 404
+
+        gen = MapDataGenerator()
+        # Construit un GDF prêt à l’export (EPSG:4326)
+        gdf_export, legend, _ = gen.build_thematic_gdf(gdf_source, field_name=field_name, palette_name=palette)
+
+        # Exporte selon fmt
+        if fmt == "geojson":
+            data = export_geojson_bytes(gdf_export)
+        elif fmt == "gpkg":
+            data = export_gpkg_bytes(gdf_export, layer=layer)
+        elif fmt == "shp":
+            data = export_shapefile_zip(gdf_export)
+        else:
+            return jsonify({'success': False, 'error': "Format non supporté (shp|gpkg|geojson)."}), 400
+
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.exception("api_map_export")
+        return jsonify({'success': False, 'error': f"Erreur export: {e}"}), 500
+
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filenames = {
+        "shp":    f"zada_thematic_{field_name}_{palette}_{stamp}.shp.zip",
+        "gpkg":   f"zada_thematic_{field_name}_{palette}_{stamp}.gpkg",
+        "geojson":f"zada_thematic_{field_name}_{palette}_{stamp}.geojson",
+    }
+    mimes = {
+        "shp":    "application/zip",
+        "gpkg":   "application/geopackage+sqlite3",
+        "geojson":"application/geo+json",
+    }
+    return send_file(
+        io.BytesIO(data),
+        mimetype=mimes.get(fmt, "application/octet-stream"),
+        as_attachment=True,
+        download_name=filenames.get(fmt, f"zada_thematic_{stamp}.bin"),
+    )

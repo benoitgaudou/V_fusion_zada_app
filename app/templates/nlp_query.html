@@ -93,6 +93,25 @@
                         {{ form.submit(class="btn btn-success", id="searchBtn") }}
                     </div>
                 </form>
+
+                <hr class="my-3">
+
+                <div class="row g-2 align-items-end">
+                <div class="col-6">
+                    <label for="fmtNlpSelect" class="form-label"><strong>Format d’export</strong></label>
+                    <select id="fmtNlpSelect" class="form-select">
+                    <option value="geojson">GeoJSON</option>
+                    <option value="gpkg">GeoPackage</option>
+                    <option value="shp">Shapefile (.zip)</option>
+                    </select>
+                </div>
+                <div class="col-6">
+                    <button id="btnExportNlp" class="btn btn-outline-success w-100">
+                    <i class="fas fa-download me-1"></i> Exporter les résultats
+                    </button>
+                    <div id="nlpExportMsg" class="form-text mt-1"></div>
+                </div>
+                </div>
                 
                 <!-- Résultats de recherche - GARDÉ TEL QUEL -->
                 <div id="searchResults" class="mt-4" style="display: none;">

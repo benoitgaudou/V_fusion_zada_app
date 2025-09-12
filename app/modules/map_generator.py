@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 class MapDataGenerator:
     """
     Générateur minimal pour :
-      - Carte thématique par champ (catégoriel / discret, <= 20 modalités)
+      - Carte thématique par champ (catégoriel / discret, <= 200 modalités)
       - Légende simple
       - Bounds (pour ajuster la vue Leaflet)
     """
 
     # Nombre max de classes gérables en "simple" (sinon on renvoie une erreur)
-    MAX_CLASSES = 170
+    MAX_CLASSES = 200
 
     def __init__(self):
         # Palettes catégorielles simples (on cycle si plus de valeurs que de couleurs)
@@ -183,30 +183,75 @@ class MapDataGenerator:
     
     # les correctifs de cette fonction 
     # Normalisation pour la comparaison :  trim, lowercase, espaces internes compactés
+    def build_thematic_gdf(
+        self,
+        gdf: gpd.GeoDataFrame,
+        field_name: str,
+        palette_name: str = "default",
+    ) -> tuple[gpd.GeoDataFrame, dict, Optional[list[list[float]]]]:
+            """
+            Construit un GDF prêt à l'export à partir d'un champ 'field_name'.
+            Colonnes: id_zone (si présent), thematic_value, thematic_color, geometry (EPSG:4326).
+            Retourne (gdf_export, legend, bounds).
+            """
+            res = self.generate_thematic_geojson(gdf, field_name=field_name, palette_name=palette_name)
+            if not res.get("success"):
+                raise ValueError(res.get("error") or "Génération thématique échouée.")
+
+            # Reproduire le mapping valeur->couleur utilisé dans generate_thematic_geojson
+            geojson = res["geojson"]
+            legend = res["legend"]
+            bounds = self.get_map_bounds(gdf)  # en WGS84
+
+            # On repart du GDF original pour éviter la conversion JSON->GDF
+            gdf_copy = gdf.copy()
+            if gdf_copy.crs and gdf_copy.crs.to_string() != "EPSG:4326":
+                gdf_copy = gdf_copy.to_crs("EPSG:4326")
+            elif gdf_copy.crs is None:
+                gdf_copy = gdf_copy.set_crs("EPSG:4326")
+
+            # Refaire la logique value/color comme dans generate_thematic_geojson
+            series = gdf[field_name]
+            s_valid = series.dropna()
+            unique_vals = s_valid.unique()
+            palette = self.categorical_palettes.get(palette_name, self.categorical_palettes["default"])
+            values_sorted = pd.Series(unique_vals).astype(str).sort_values(key=lambda s: s.str.lower()).tolist()
+            color_map = {val: palette[i % len(palette)] for i, val in enumerate(values_sorted)}
+
+            gdf_export = gdf_copy.copy()
+            gdf_export["thematic_value"] = series.astype(str).where(series.notna(), other="N/A")
+            gdf_export["thematic_color"] = gdf_export["thematic_value"].map(color_map).fillna("#808080")
+
+            # Garder id_zone si présent
+            cols = ["thematic_value", "thematic_color", "geometry"]
+            if "id_zone" in gdf_export.columns:
+                cols = ["id_zone"] + cols
+                gdf_export["id_zone"] = gdf_export["id_zone"].astype(str)
+
+            gdf_export = gdf_export[cols]
+            return gdf_export, legend, bounds
     
+    @staticmethod
     def _norm(name: str) -> str:
         
         return re.sub(r'\s+',' ', str(name).strip().lower())
     
     def prepare_criterion_options(self, gdf: gpd.GeoDataFrame) -> List[Dict]:
-        """
-        Retourne des champs candidats (catégoriels / discrets) pour l’UI.
-        On filtre les colonnes techniques évidentes.
-        """
         if gdf is None or gdf.empty:
             return []
 
         excluded = {
-            "geometry", "Original_source_id", "Original_source_name",
+            "geometry", "original_source_id", "original_source_name",
             "intersection_type", "source_pair", "source_names", "sources",
         }
+        # normaliser excluded
+        excluded_norm = {self._norm(x) for x in excluded}
 
         candidates = []
-        for col in sorted([c for c in gdf.columns if c not in excluded]):
+        for col in sorted([c for c in gdf.columns if self._norm(c) not in excluded_norm]):
             s = gdf[col]
             if s.notna().any():
                 nunique = s.nunique(dropna=True)
-                # critère "simple": dtype object OU numérique avec peu de classes
                 if s.dtype == "object" or nunique <= self.MAX_CLASSES:
                     sample = [str(v) for v in s.dropna().unique()[:5].tolist()]
                     candidates.append({

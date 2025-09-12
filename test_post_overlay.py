@@ -2,7 +2,7 @@
 from shapely.geometry import Polygon
 import geopandas as gpd
 
-# ⚠️ importe ta classe telle qu’elle est dans ton projet
+#  importe ta classe telle qu’elle est dans ton projet
 from app.modules.zada_fusion import ZadaMerger, MergeConfig
 
 def main():
