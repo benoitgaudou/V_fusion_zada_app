@@ -16,6 +16,9 @@ class ZADAMapManager {
         this.thematicLayer = null;
         this.currentThematicField = null;
         this.availableFields = [];
+
+        this.currentNLPThreshold = 0.5; // seuil courant appliqué au style NLP
+        this._legends = new Map();      // key -> L.control (ex.: 'nlp-legend')
     }
 
     initializeMap(containerId, options = {}) {
@@ -368,6 +371,62 @@ class ZADAMapManager {
     });
     }
 
+    _removeLayer(key, mapId) {
+    const map = this.maps.get(mapId);
+    const mapLayers = this.layers.get(mapId);
+    if (!map || !mapLayers || !mapLayers.has(key)) return;
+    const lyr = mapLayers.get(key);
+    if (lyr && map.hasLayer(lyr)) map.removeLayer(lyr);
+    mapLayers.delete(key);
+    }
+
+    _addOrUpdateLegend(mapId, key, threshold) {
+    const map = this.maps.get(mapId);
+    if (!map) return;
+    this._removeLegend(mapId, key);
+
+    const legend = L.control({ position: 'bottomright' });
+    legend.onAdd = () => {
+        const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar');
+        div.style.background = '#fff';
+        div.style.padding = '8px 10px';
+        div.style.lineHeight = '1.2';
+        div.style.boxShadow = '0 1px 4px rgba(0,0,0,0.2)';
+        div.style.borderRadius = '6px';
+
+        const items = [
+        { label: `≥ ${threshold.toFixed(2)} & +75% au-dessus`, color: '#e74c3c' },
+        { label: `≥ ${threshold.toFixed(2)} & +50% au-dessus`, color: '#f39c12' },
+        { label: `≥ ${threshold.toFixed(2)} & +25% au-dessus`, color: '#f1c40f' },
+        { label: `≥ ${threshold.toFixed(2)} (proche du seuil)`, color: '#3498db' },
+        ];
+
+        div.innerHTML = `
+        <div style="font-weight:600;margin-bottom:6px">Similarity</div>
+        <div style="margin-bottom:6px" class="small">Seuil: <strong>${threshold.toFixed(2)}</strong></div>
+        ${items.map(b => `
+            <div class="small" style="display:flex;align-items:center;margin:4px 0">
+            <span style="display:inline-block;width:14px;height:14px;background:${b.color};margin-right:8px;border-radius:2px;"></span>
+            <span>${b.label}</span>
+            </div>
+        `).join('')}
+        `;
+        return div;
+    };
+    legend.addTo(map);
+    this._legends.set(`${mapId}:${key}`, legend);
+    }
+
+    _removeLegend(mapId, key) {
+    const map = this.maps.get(mapId);
+    const k = `${mapId}:${key}`;
+    if (this._legends.has(k)) {
+        const ctrl = this._legends.get(k);
+        if (ctrl && map) map.removeControl(ctrl);
+        this._legends.delete(k);
+    }
+    }
+
 
     clearLayers(mapId) {
         const map = this.maps.get(mapId);
@@ -379,34 +438,49 @@ class ZADAMapManager {
         this.hideThematicLegend();
         this.hideStatus();
         this.currentThematicField = null;
+        this._removeLegend(mapId, 'nlp-legend');
     }
 
-
-
+    
 // Méthode pour afficher les résultats NLP
-displayNLPResults(results, mapId = 'nlpMap') {
-    const map = this.maps.get(mapId);
-    if (!map || !results.features) return;
-    
-    // Supprimer la couche précédente
-    if (this.layers.has('nlp-results')) {
-        const oldLayer = this.layers.get('nlp-results');
-        map.removeLayer(oldLayer);
-    }
-    
-    // Créer la nouvelle couche
-    const nlpLayer = L.geoJSON(results.features, {
-        style: this.getNLPStyle.bind(this),
-        onEachFeature: this.getNLPPopup.bind(this)
-    });
-    
-    map.addLayer(nlpLayer);
-    this.layers.set('nlp-results', nlpLayer);
-    
-    // Ajuster la vue
-    if (nlpLayer.getBounds().isValid()) {
-        map.fitBounds(nlpLayer.getBounds(), { padding: [20, 20] });
-    }
+displayNLPResults(results, mapId = 'nlpMap', threshold = 0.5) {
+  const map = this.maps.get(mapId);
+  if (!map) return;
+
+  // nettoie si pas de features
+  if (!results || !Array.isArray(results.features) || results.features.length === 0) {
+    this._removeLayer('nlp-results', mapId);
+    this._removeLegend(mapId, 'nlp-legend');
+    return;
+  }
+
+  // mémoriser le seuil courant
+  const thr = Number(threshold);
+  this.currentNLPThreshold = isNaN(thr) ? 0.5 : Math.max(0, Math.min(1, thr));
+
+  // supprimer ancienne couche (pour CE mapId)
+  this._removeLayer('nlp-results', mapId);
+
+  // créer nouvelle couche
+  const nlpLayer = L.geoJSON(results.features, {
+    style: (f) => this.getNLPStyle(f),              // utilisera this.currentNLPThreshold
+    onEachFeature: (f, layer) => this.getNLPPopup(f, layer)
+  });
+
+  nlpLayer.addTo(map);
+
+  // enregistrer la couche dans le registre PAR CARTE
+  const mapLayers = this.layers.get(mapId);
+  if (mapLayers) mapLayers.set('nlp-results', nlpLayer);
+
+  // ajuster la vue
+  const b = nlpLayer.getBounds?.();
+  if (b && b.isValid && b.isValid()) {
+    map.fitBounds(b, { padding: [20, 20] });
+  }
+
+  // légende dynamique
+  this._addOrUpdateLegend(mapId, 'nlp-legend', this.currentNLPThreshold);
 }
 
 // Style pour les résultats NLP
@@ -435,23 +509,21 @@ getNLPStyle(feature) {
 
 // Popup pour les résultats NLP
 getNLPPopup(feature, layer) {
-    if (!feature?.properties) return;
-    
-    const props = feature.properties;
-    const similarity = (props.nlp_similarity * 100).toFixed(1);
-    
-    const html = `
-        <div class="nlp-popup">
-            <h6><i class="fas fa-brain me-1"></i><strong>Résultat NLP</strong></h6>
-            <table class="table table-sm table-borderless mb-0">
-                <tr><td><strong>Rang:</strong></td><td>#${props.nlp_rank}</td></tr>
-                <tr><td><strong>Similarité:</strong></td><td>${similarity}%</td></tr>
-                <tr><td><strong>Contenu:</strong></td><td>${props.nlp_content_preview}</td></tr>
-            </table>
-        </div>
-    `;
-    
-    layer.bindPopup(html, { maxWidth: 300, className: 'nlp-popup' });
+  if (!feature?.properties) return;
+  const props = feature.properties;
+  const simNum = Number(props.nlp_similarity);
+  const similarity = isNaN(simNum) ? '—' : (simNum * 100).toFixed(1) + '%';
+
+  const html = `
+    <div class="nlp-popup">
+      <h6><i class="fas fa-brain me-1"></i><strong>Résultat NLP</strong></h6>
+      <table class="table table-sm table-borderless mb-0">
+        <tr><td><strong>Rang:</strong></td><td>#${props.nlp_rank ?? '—'}</td></tr>
+        <tr><td><strong>Similarité:</strong></td><td>${similarity}</td></tr>
+        <tr><td><strong>Contenu:</strong></td><td>${props.nlp_content_preview ?? ''}</td></tr>
+      </table>
+    </div>`;
+  layer.bindPopup(html, { maxWidth: 300, className: 'nlp-popup' });
 }
 }
 

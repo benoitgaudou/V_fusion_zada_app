@@ -40,9 +40,10 @@ def init_from_fusion_export(export_path: str, backend: str | None = None) -> Dic
 
 
 
-def semantic_search(export_path: str, query: str, top_k: int = 10) -> Dict[str, Any]:
+def semantic_search(export_path: str, query: str, top_k: int = 10, similarity_threshold: float = 0.5) -> Dict[str, Any]:
     """
-    Exécute une recherche sémantique via le moteur associé au même export_path.
+    Exécute une recherche sémantique via le moteur associé au même export_path,
+    en filtrant les résultats pour ne conserver que ceux avec similarité >= similarity_threshold.
     """
     eng = _get_engine(export_path)
     if not eng.is_ready:
@@ -52,6 +53,10 @@ def semantic_search(export_path: str, query: str, top_k: int = 10) -> Dict[str, 
         }
 
     df = eng.search(query, top_k=top_k)
+    
+    # Filtrage des résultats selon le seuil de similarité
+    df = df[df["similarite"] >= similarity_threshold]
+    
     geojson, legend, bounds = eng.to_geojson(df)
 
     # injecte rang/similarité dans les features pour les popups front

@@ -428,17 +428,48 @@ def api_nlp_search():
     if not meta or not meta.get('export_path'):
         return jsonify({'success': False, 'error': "Aucun résultat de fusion en session."}), 400
 
+    # Accepte JSON OU form-data (fallback)
     data = request.get_json(silent=True) or request.form
+
+    # --- Requête ---
     q = (data.get('query') or '').strip()
-    top_k = int(data.get('max_results', 10))
     if not q:
         return jsonify({'success': False, 'error': 'Requête vide'}), 400
 
+    # --- Top-K : compat "max_results" OU "top_k" ---
+    #   - priorise "top_k" si présent
+    raw_topk = data.get('top_k', data.get('max_results', 10))
     try:
-        return jsonify(semantic_search(meta['export_path'], q, top_k=top_k))
+        top_k = int(raw_topk)
+    except (TypeError, ValueError):
+        top_k = 10
+    # bornes raisonnables
+    top_k = max(1, min(200, top_k))
+
+    # --- Seuil de similarité (NOUVEAU) ---
+    raw_thresh = data.get('similarity_threshold', 0.5)
+    try:
+        similarity_threshold = float(raw_thresh)
+    except (TypeError, ValueError):
+        similarity_threshold = 0.5
+    # clamp dans [0,1]
+    similarity_threshold = max(0.0, min(1.0, similarity_threshold))
+
+    try:
+        result = semantic_search(
+            export_path=meta['export_path'],
+            query=q,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold
+        )
+        # Si ta fonction renvoie success=False, renvoie 200 ou 500 ? Ici: 200 si c'est un échec "métier", 500 si exception
+        status = 200 if result.get('success', False) else 200
+        return jsonify(result), status
+
     except Exception as e:
         current_app.logger.exception("api_nlp_search")
         return jsonify({'success': False, 'error': str(e)}), 500
+
     
 @main_bp.route('/api/nlp/models', methods=['GET'])
 def api_nlp_models():

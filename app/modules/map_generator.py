@@ -23,7 +23,7 @@ class MapDataGenerator:
     """
 
     # Nombre max de classes gérables en "simple" (sinon on renvoie une erreur)
-    MAX_CLASSES = 200
+    MAX_CLASSES = 250
 
     def __init__(self):
         # Palettes catégorielles simples (on cycle si plus de valeurs que de couleurs)

@@ -68,6 +68,8 @@ def export_gpkg_bytes(gdf: gpd.GeoDataFrame, layer: str = "zada_nlp") -> bytes:
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "export.gpkg")
         gdf.to_file(path, driver="GPKG", layer=layer, index=False)
+        with open(path, 'rb') as f:
+            bio.write(f.read())
     bio.seek(0)
     return bio.getvalue()
 
