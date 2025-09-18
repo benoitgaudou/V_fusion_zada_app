@@ -179,9 +179,7 @@ class MapDataGenerator:
     # ------------------------------------------------------------------ #
     # (Optionnel) Pour aider l’UI à proposer des champs pertinents
     # ------------------------------------------------------------------ #*
-    
-    
-    # les correctifs de cette fonction 
+
     # Normalisation pour la comparaison :  trim, lowercase, espaces internes compactés
     def build_thematic_gdf(
         self,
