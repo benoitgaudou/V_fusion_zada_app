@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 class MapDataGenerator:
     """
     Générateur minimal pour :
-      - Carte thématique par champ (catégoriel / discret, <= 200 modalités)
+      - Carte thématique par champ (catégoriel / discret, <= 500 modalités)
       - Légende simple
       - Bounds (pour ajuster la vue Leaflet)
     """
 
     # Nombre max de classes gérables en "simple" (sinon on renvoie une erreur)
-    MAX_CLASSES = 250
+    MAX_CLASSES = 500
 
     def __init__(self):
         # Palettes catégorielles simples (on cycle si plus de valeurs que de couleurs)
