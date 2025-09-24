@@ -62,20 +62,10 @@ class MapDataGenerator:
         palette_name: str = "default",
     ) -> Dict:
         """
-        Génère un GeoJSON stylé + une légende pour un champ donné.
-        - Supporte les champs 'catégoriels' (dtype object) ou 'discrets' (numériques avec peu de valeurs).
-        - Si > MAX_CLASSES modalités, renvoie une erreur (on ajoutera les classes continues plus tard).
-
-        Retour:
-            {
-              "success": True/False,
-              "geojson": {...},               # FeatureCollection stylée
-              "legend": {"type":"discrete","items":[{"label","color","count"}...]},
-              "field_name": str,
-              "palette_name": str,
-              "unique_count": int,
-              "error": str (si échec)
-            }
+        Génère un GeoJSON stylé + une légende pour un champ donné,
+        en conservant toutes les valeurs valides et en excluant seulement:
+        - NaN/None
+        - (optionnel) une liste stricte de tokens invalides (ex. 'nsp').
         """
         try:
             if gdf is None or gdf.empty:
@@ -85,67 +75,97 @@ class MapDataGenerator:
                 return {"success": False, "error": f"Champ '{field_name}' introuvable"}
 
             series = gdf[field_name]
-            # valeurs non nulles
-            s_valid = series.dropna()
 
-            if s_valid.empty:
-                return {"success": False, "error": f"Le champ '{field_name}' ne contient aucune valeur valide"}
+            # ---- 1) Filtre "valeur valide" minimaliste ----
+            # Ne retire que NaN/None + tokens invalides EXACTS (optionnel)
+            valid_mask = series.notna()
 
-            # Détection "simple" : catégoriel OU numérique mais peu de valeurs
+            # Tokens invalides exacts (normalisés en minuscules, sans espaces)
+            # -> tu peux les piloter via self.placeholder_tokens si tu veux.
+            invalid_tokens = set(getattr(self, "placeholder_tokens", {""}))
+
+            if pd.api.types.is_object_dtype(series):
+                s_norm = series.astype(str).str.strip().str.lower()
+                valid_mask &= ~s_norm.isin(invalid_tokens)
+                # NE PAS exclure les chaînes vides si tu en as besoin ? Ici on les exclut:
+                valid_mask &= s_norm.ne("")  # retire les blancs purs uniquement
+
+            # ---- 2) Géométrie présente / non vide ----
+            geom_mask = gdf.geometry.notna()
+            try:
+                geom_mask &= ~gdf.geometry.is_empty
+            except Exception:
+                pass
+            # (Optionnel) pour exclure les géométries invalides topologiquement:
+            # try:
+            #     geom_mask &= gdf.geometry.is_valid
+            # except Exception:
+            #     pass
+
+            # ---- 3) On ne conserve que les lignes réellement valides ----
+            gdf_valid = gdf[valid_mask & geom_mask].copy()
+            if gdf_valid.empty:
+                return {
+                    "success": False,
+                    "error": f"Aucune entité valide pour '{field_name}' (valeur et/ou géométrie manquante)."
+                }
+
+            s_valid = gdf_valid[field_name]
             is_numeric = pd.api.types.is_numeric_dtype(s_valid)
-            unique_vals = s_valid.unique()
+            unique_vals = pd.Index(s_valid.unique())
+            nunique = unique_vals.size
 
-            # Si numérique avec trop de classes → on refuse pour l'instant (pas de classes continues dans cette version)
-            if is_numeric and s_valid.nunique() > self.MAX_CLASSES:
+            # ---- 4) Garde-fous sur le nombre de classes ----
+            if is_numeric and nunique > self.MAX_CLASSES:
                 return {
                     "success": False,
                     "error": (
-                        f"Le champ '{field_name}' contient trop de valeurs uniques ({s_valid.nunique()}). "
-                        f"Choisissez un champ avec ≤ {self.MAX_CLASSES} modalités ou attendez la version 'classes continues'."
+                        f"Le champ '{field_name}' contient trop de valeurs uniques ({nunique}). "
+                        f"Choisissez ≤ {self.MAX_CLASSES} modalités ou activez un mode 'classes continues'."
                     ),
                 }
-
-            # Si non numérique mais trop de catégories → idem
-            if (not is_numeric) and len(unique_vals) > self.MAX_CLASSES:
+            if (not is_numeric) and nunique > self.MAX_CLASSES:
                 return {
                     "success": False,
                     "error": (
-                        f"Trop de catégories pour '{field_name}' ({len(unique_vals)}). "
-                        f"Choisissez un champ avec ≤ {self.MAX_CLASSES} catégories."
+                        f"Trop de catégories pour '{field_name}' ({nunique}). "
+                        f"Choisissez ≤ {self.MAX_CLASSES} catégories."
                     ),
                 }
 
-            # Palette
+            # ---- 5) Palette & mapping ----
             palette = self.categorical_palettes.get(palette_name, self.categorical_palettes["default"])
-
-            # Mapping valeur → couleur (on stringifie pour éviter les soucis de clés numpy types)
-            values_sorted = pd.Series(unique_vals).astype(str).sort_values(key=lambda s: s.str.lower()).tolist()
+            values_sorted = (
+                pd.Series(unique_vals)
+                .astype(str)
+                .sort_values(key=lambda s: s.str.lower())
+                .tolist()
+            )
             color_map = {val: palette[i % len(palette)] for i, val in enumerate(values_sorted)}
 
-            # Comptages pour la légende
+            # ---- 6) Comptages (sur les valides conservées) ----
             value_counts = s_valid.astype(str).value_counts()
 
-            # Appliquer le style (copie du gdf)
-            gdf_styled = gdf.copy()
-            gdf_styled["__thematic_value__"] = series.astype(str).where(series.notna(), other="N/A")
-            gdf_styled["__thematic_color__"] = gdf_styled["__thematic_value__"].map(color_map).fillna("#808080")
+            # ---- 7) Styles (aucun "N/A": on n’exporte pas les nulls) ----
+            gdf_valid["__thematic_value__"] = s_valid.astype(str)
+            gdf_valid["__thematic_color__"] = gdf_valid["__thematic_value__"].map(color_map)
 
-            # Conversion WGS84 pour Leaflet si nécessaire
-            gdf_wgs84 = gdf_styled.to_crs("EPSG:4326") if gdf_styled.crs and gdf_styled.crs.to_string() != "EPSG:4326" else gdf_styled
+            # ---- 8) Projection WGS84 si besoin ----
+            if gdf_valid.crs and gdf_valid.crs.to_string() != "EPSG:4326":
+                gdf_wgs84 = gdf_valid.to_crs("EPSG:4326")
+            else:
+                gdf_wgs84 = gdf_valid
 
-            # Création GeoJSON
+            # ---- 9) GeoJSON uniquement avec les features valides ----
             geojson = json.loads(gdf_wgs84.to_json())
 
-            # Injecter style + propriétés thématiques
-            # on assume l'ordre aligné (to_json conserve l'ordre des lignes)
+            # ---- 10) Injection style + props ----
             for i, feat in enumerate(geojson.get("features", [])):
-                # récupére la ligne correspondante (même index i)
-                row = gdf_styled.iloc[i]
+                row = gdf_valid.iloc[i]
                 color = row["__thematic_color__"]
                 value = row["__thematic_value__"]
 
                 props = feat.setdefault("properties", {})
-                # style Leaflet
                 props["style"] = {
                     "fillColor": color,
                     "color": color,
@@ -156,7 +176,7 @@ class MapDataGenerator:
                 props["thematic_field"] = field_name
                 props["thematic_value"] = value
 
-            # Légende simple (discrete)
+            # ---- 11) Légende (discrete) ----
             legend_items = [
                 {"label": k, "color": color_map.get(k, "#808080"), "count": int(value_counts.get(k, 0))}
                 for k in values_sorted
@@ -170,6 +190,11 @@ class MapDataGenerator:
                 "field_name": field_name,
                 "palette_name": palette_name,
                 "unique_count": int(len(values_sorted)),
+                # utiles pour l'UI:
+                "total_input": int(len(gdf)),
+                "kept": int(len(gdf_valid)),
+                "filtered_out": int(len(gdf) - len(gdf_valid)),
+                "invalid_tokens": sorted(invalid_tokens),
             }
 
         except Exception as e:
