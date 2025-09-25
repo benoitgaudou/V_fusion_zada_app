@@ -13,12 +13,16 @@ import traceback
 import json
 import io
 import datetime as dt
+from io import BytesIO
+import os
 
 from app.forms import FileUploadForm, FusionSIGForm, NLPQueryForm
 from app.modules.file_loader import FileLoader, FileLoaderConfig
 from app.modules.zada_fusion import ZadaMerger, MergeConfig
 from app.modules.map_generator import MapDataGenerator
 from app.modules.exceptions import ZADAException, FileLoadingError
+from app.modules.nlp.card_exports import export_gdf
+
 
 from app.modules.nlp import nlp_engine
 from app.forms import NLPInitForm
@@ -169,7 +173,7 @@ def upload_files():
             )
             
         def _wipe_fusion_session():
-            for key in ('fusion_result_metadata', 'candidate_fields', 'loaded_files', 'stage_paths'):
+            for key in ('fusion_result_metadata', 'candidate_fields', 'loaded_files', 'stage_paths', 'fusion_gdf'):
                 session.pop(key, None)
         _wipe_fusion_session()
 
@@ -196,10 +200,12 @@ def upload_files():
             flash("Fusion vide.", "error")
             return redirect(url_for('main.home'))
 
-
         # Sauvegarder le GeoJSON de résultat
         out_geojson = results_folder / f"fusion_result_all.geojson"
         result_gdf.to_file(out_geojson, driver="GeoJSON")
+
+        # Stocker le GeoDataFrame en session (sérialisé en JSON pour éviter les problèmes)
+        session['fusion_gdf'] = result_gdf.to_json()
 
         # Métadonnées pour la page 2
         session['fusion_result_metadata'] = {
@@ -221,6 +227,96 @@ def upload_files():
         logger.exception("Erreur upload/fusion inattendue")
         flash(f"Erreur lors du chargement/fusion: {str(e)}", "error")
         return redirect(url_for('main.home'))
+
+
+# Nouvelle route pour l'export des résultats de fusion
+@main_bp.route('/export_fusion', methods=['POST'])
+def export_fusion():
+    """Exporte les résultats de fusion dans le format demandé"""
+    try:
+        # Vérifier que la fusion a été effectuée
+        if 'fusion_result_metadata' not in session:
+            flash("Aucun résultat de fusion disponible. Veuillez d'abord effectuer une fusion.", "error")
+            return redirect(url_for('main.fusion_sig'))
+        
+        # Récupérer le format demandé
+        export_format = request.form.get('format', 'geojson')
+        
+        # Lire le fichier GeoJSON sauvegardé (méthode simple et fiable)
+        export_path = session['fusion_result_metadata']['export_path']
+        if not os.path.exists(export_path):
+            flash("Le fichier de fusion n'existe plus. Veuillez refaire la fusion.", "error")
+            return redirect(url_for('main.fusion_sig'))
+        
+        # Charger le GeoDataFrame depuis le fichier
+        result_gdf = gpd.read_file(export_path)
+        
+        # Utiliser votre fonction d'export existante
+        file_bytes = export_gdf(export_format, result_gdf, layer="zada_fusion")
+        
+        # Déterminer le nom du fichier et le type MIME
+        filenames = {
+            'geojson': 'fusion_zada.geojson',
+            'gpkg': 'fusion_zada.gpkg', 
+            'shp': 'fusion_zada.zip'
+        }
+        
+        mimetypes = {
+            'geojson': 'application/geo+json',
+            'gpkg': 'application/geopackage+sqlite3',
+            'shp': 'application/zip'
+        }
+        
+        filename = filenames.get(export_format, 'fusion_zada.zip')
+        mimetype = mimetypes.get(export_format, 'application/zip')
+        
+        return send_file(
+            BytesIO(file_bytes),
+            as_attachment=True,
+            download_name=filename,
+            mimetype=mimetype
+        )
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de l'export: {e}")
+        flash(f"Erreur lors de l'export: {str(e)}", "error")
+        return redirect(url_for('main.fusion_sig'))
+    
+
+# Ajout 
+@main_bp.route('/export_fusion', methods=['POST'])
+def export_fusion():
+    """Exporte les résultats de fusion"""
+    try:
+        # Vérification basique
+        if 'fusion_result_metadata' not in session:
+            flash("Aucun résultat de fusion disponible", "error")
+            return redirect(url_for('main.fusion_sig'))
+        
+        # Paramètres
+        export_format = request.form.get('format', 'geojson')
+        export_path = session['fusion_result_metadata']['export_path']
+        
+        if not os.path.exists(export_path):
+            flash("Fichier de fusion introuvable", "error")
+            return redirect(url_for('main.fusion_sig'))
+        
+        # Chargement et export
+        result_gdf = gpd.read_file(export_path)
+        file_bytes = export_gdf(export_format, result_gdf)
+        
+        # Retour du fichier
+        filename = f"fusion_zada.{'zip' if export_format == 'shp' else export_format}"
+        return send_file(
+            BytesIO(file_bytes),
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        logger.error(f"Erreur export fusion: {e}")
+        flash(f"Erreur lors de l'export: {str(e)}", "error")
+        return redirect(url_for('main.fusion_sig'))
 
 # -------------------------------------------------------------------
 # Page 2 : UI champs + génération de carte (pas de POST de fusion ici)

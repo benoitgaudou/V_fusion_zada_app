@@ -86,9 +86,31 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
 
           <!-- Statut -->
           <div id="thematic-generation-status" style="display:none;"></div>
+          
+          <!-- Télécharger l'ensemble de données fusionnées -->
+          <div class="border-top pt-3 mt-3">
+            <div class="row">
+              <div class="col-8">
+                <select id="fusion-export-format" class="form-select">
+                  <option value="geojson">Exporter en GeoJSON</option>
+                  <option value="gpkg">Exporter en GeoPackage</option>
+                  <option value="shp">Exporter en Shapefile</option>
+                </select>
+              </div>
+              <div class="col-4">
+                <form action="{{ url_for('main.export_fusion') }}" method="post">
+                  <input type="hidden" name="format" id="fusion-export-format-hidden" value="geojson">
+                  <button type="submit" class="btn btn-success w-100">
+                    <i class="fas fa-download me-1"></i> Télécharger
+                  </button>
+                </form>
+              </div>
+            </div>
+            <small class="text-muted">Téléchargez les données fusionnées complètes</small>
+
           </div>
         </div>
-
+      </div>
     </div>
 
     {% if loaded_files %}
@@ -107,7 +129,9 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
           <span class="text-muted">{{ file.count }} entités</span>
         </div>
         {% endfor %}
-        <div class="mt-2">
+
+        
+        <div class="mt-3">
           <a href="{{ url_for('main.home') }}" class="btn btn-sm btn-outline-secondary">
             <i class="fas fa-arrow-left me-1"></i> Retour au chargement / fusion
           </a>
@@ -116,7 +140,6 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
     </div>
     {% endif %}
   </div>
-
 
   <!-- Colonne droite : carte + légende -->
   <div class="col-lg-8">
@@ -177,6 +200,9 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
 
 <script src="{{ url_for('static', filename='js/leaflet_script.js') }}"></script>
 <script>
+  // Définir l'URL d'export une fois
+  const exportFusionUrl = "{{ url_for('main.export_fusion') }}";
+  
   // Bouton légende on/off
   document.addEventListener('DOMContentLoaded', () => {
     const btn = document.getElementById('toggleLegendBtn');
@@ -189,6 +215,33 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
     const resetBtn = document.getElementById('resetViewBtn');
     if (resetBtn && window.zadaMapManager) {
       resetBtn.addEventListener('click', () => window.zadaMapManager()?.fitToAllLayers('map'));
+    }
+
+    // Synchronisation du format d'export de fusion
+    const fusionFormatSelect = document.getElementById('fusion-export-format');
+    const fusionFormatHidden = document.getElementById('fusion-export-format-hidden');
+    
+    if (fusionFormatSelect && fusionFormatHidden) {
+      fusionFormatSelect.addEventListener('change', function() {
+        fusionFormatHidden.value = this.value;
+      });
+      
+      // Message de confirmation
+      const exportForm = document.querySelector(`form[action="${exportFusionUrl}"]`);
+      if (exportForm) {
+        exportForm.addEventListener('submit', function(e) {
+          const format = fusionFormatSelect.value;
+          const formatNames = {
+            'geojson': 'GeoJSON',
+            'gpkg': 'GeoPackage', 
+            'shp': 'Shapefile'
+          };
+          
+          if (!confirm(`Exporter les données de fusion en format ${formatNames[format]} ?`)) {
+            e.preventDefault();
+          }
+        });
+      }
     }
   });
 </script>

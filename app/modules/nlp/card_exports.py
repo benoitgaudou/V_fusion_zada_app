@@ -161,6 +161,45 @@ def export_shapefile_zip(gdf: gpd.GeoDataFrame) -> bytes:
     bio.seek(0)
     return bio.getvalue()
 
+# ----------------- Export direct d'un GeoDataFrame -----------------
+def export_gdf(fmt: str, gdf: gpd.GeoDataFrame, layer: str = "zada_fusion") -> bytes:
+    """
+    Exporte directement un GeoDataFrame dans le format demandé.
+    Utilisable pour les résultats de fusion.
+    
+    Parameters
+    ----------
+    fmt : str
+        Format d'export: 'geojson', 'gpkg', 'shp'
+    gdf : gpd.GeoDataFrame
+        GeoDataFrame à exporter
+    layer : str
+        Nom de la couche (pour GPKG)
+    
+    Returns
+    -------
+    bytes
+        Fichier exporté sous forme de bytes
+    """
+    fmt = (fmt or "").lower()
+    
+    # Nettoyer le GeoDataFrame pour l'export
+    if gdf is None or gdf.empty:
+        # Créer un GeoDataFrame vide minimal si nécessaire
+        gdf = gpd.GeoDataFrame(columns=["id_zone", "geometry"], geometry="geometry", crs="EPSG:4326")
+    
+    gdf = gdf.fillna("")
+    
+    # Utiliser les fonctions existantes
+    if fmt == "geojson":
+        return export_geojson_bytes(gdf)
+    elif fmt == "gpkg":
+        return export_gpkg_bytes(gdf, layer=layer)
+    elif fmt == "shp":
+        return export_shapefile_zip(gdf)
+    else:
+        raise ValueError("Format non supporté (utiliser: shp|gpkg|geojson)")
+
 
 
 # ----------------- Orchestrateur -----------------

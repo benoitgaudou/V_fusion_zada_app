@@ -82,7 +82,7 @@ class MapDataGenerator:
 
             # Tokens invalides exacts (normalisés en minuscules, sans espaces)
             # -> tu peux les piloter via self.placeholder_tokens si tu veux.
-            invalid_tokens = set(getattr(self, "placeholder_tokens", {""}))
+            invalid_tokens = set(getattr(self, "placeholder_tokens", {"nan"}))
 
             if pd.api.types.is_object_dtype(series):
                 s_norm = series.astype(str).str.strip().str.lower()

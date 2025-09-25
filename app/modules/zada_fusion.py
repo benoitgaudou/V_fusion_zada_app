@@ -173,6 +173,8 @@ class ZadaMerger:
                 fuzzy_threshold=84,   # 78 = plus tolérant ; 88 = plus strict
                 join_sep=", "
             )
+            # Normalisation anti-"nan" sur les colonnes texte
+            result = self._sanitize_object_columns(result, sep=", ")
             logger.info("Post-overlay: %d→%d colonnes (pliage)", before_cols, len(result.columns))
         except Exception as e:
             logger.warning("Pliage post-overlay ignoré (RapidFuzz installé ?) : %s", e)
@@ -222,14 +224,18 @@ class ZadaMerger:
         return "geom" if s == "geometry" else s
 
     def _concat_dedup_vals(self, vals, sep=", "):
+        """Concaténation NA-safe + déduplication; ne casse PAS les valeurs contenant '+'."""
         seen, out = set(), []
         for v in vals:
-            if v is None:
+            # ignore None/NaN pour tous types
+            if v is None or pd.isna(v):
                 continue
+            # éclate seulement sur , ; | (on NE touche PAS aux '+')
             for part in re.split(r"[,\|;]", str(v)):
                 t = part.strip()
-                if t and t not in seen:
-                    seen.add(t); out.append(t)
+                if t and t.lower() != "nan" and t not in seen:
+                    seen.add(t)
+                    out.append(t)
         return sep.join(out) if out else None
 
     def _fold_columns_after_overlay(
@@ -282,6 +288,24 @@ class ZadaMerger:
 
         if "geometry" not in out.columns:
             out["geometry"] = gdf.geometry
+        return out
+    
+    def _sanitize_object_columns(self, gdf: gpd.GeoDataFrame, sep: str = ", ") -> gpd.GeoDataFrame:
+        """
+        - remplace NaN par None
+        - remplace les séparateurs [ , ; | ] par 'sep' (sans toucher aux '+')
+        - supprime les chaînes vides
+        """
+        pat = re.compile(r"\s*[,\|;]\s*")
+        out = gdf.copy()
+        for c in out.columns:
+            if c == "geometry" or not pd.api.types.is_object_dtype(out[c]):
+                continue
+            col = out[c]
+            col = col.where(~col.isna(), None)
+            col = col.apply(lambda x: pat.sub(sep, x) if isinstance(x, str) else x)
+            col = col.apply(lambda x: None if (isinstance(x, str) and not x.strip()) else x)
+            out[c] = col
         return out
 
 
