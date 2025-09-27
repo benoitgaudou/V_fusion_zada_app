@@ -120,13 +120,6 @@ def home():
 # -------------------------------------------------------------------
 @main_bp.route('/upload', methods=['POST'])
 def upload_files():
-    """
-    1) Charge les fichiers
-    2) Écrit des GeoJSON en stage
-    3) Lance la fusion backend immédiatement
-    4) Stocke le résultat + métadonnées en session
-    5) Redirige vers /fusion_sig (page 2) pour choisir un champ et générer la carte
-    """
     form = FileUploadForm()
     if not form.validate_on_submit():
         for field, errors in form.errors.items():
@@ -143,19 +136,20 @@ def upload_files():
             flash("Aucun fichier sélectionné", "error")
             return redirect(url_for('main.home'))
 
-        # Charge en GeoDataFrames puis écrit des GeoJSON stage (un par source)
-        loaded = loader.process_uploaded_files(uploaded_files)  # [(gdf, stem), ...]
+        # Nettoyer la session avant de nouvelles données
+        session.clear()
+
+        # Charge en GeoDataFrames
+        loaded = loader.process_uploaded_files(uploaded_files)
         stage_paths = []
         loaded_files_info = []
 
         candidate_fields_intersection = None
         for gdf, stem in loaded:
-            # écrire stage
             stage_path = stage_folder / f"{stem}.geojson"
             stage_path.write_text(loader.to_geojson_str(gdf), encoding="utf-8")
             stage_paths.append(str(stage_path))
 
-            # infos pour UI
             cols = _non_tech_columns(gdf)
             
             loaded_files_info.append({
@@ -165,49 +159,39 @@ def upload_files():
                 'bounds': gdf.total_bounds.tolist() if not gdf.empty else []
             })
 
-            # champs candidats (catégoriels ou peu de modalités)
             cat_cols = [c for c in cols if (str(gdf[c].dtype) == "object") or (gdf[c].nunique(dropna=True) <= 25)]
             candidate_fields_intersection = (
                 set(cat_cols) if candidate_fields_intersection is None
                 else (candidate_fields_intersection & set(cat_cols))
             )
-            
-        def _wipe_fusion_session():
-            for key in ('fusion_result_metadata', 'candidate_fields', 'loaded_files', 'stage_paths', 'fusion_gdf'):
-                session.pop(key, None)
-        _wipe_fusion_session()
 
-        # enregistre seuil pour merger
         session['area_threshold'] = float(form.area_threshold.data or 100.0)
         session['loaded_files'] = loaded_files_info
         session['stage_paths'] = stage_paths
         session['candidate_fields'] = sorted(candidate_fields_intersection) if candidate_fields_intersection else []
 
-        # >>> LANCE LA FUSION ICI (sans critère) <<<
         if len(stage_paths) < 2:
             flash("Au moins 2 sources sont nécessaires pour fusionner.", "error")
             return redirect(url_for('main.home'))
 
-        # Seuil à utiliser (déjà stocké juste au-dessus, on le relit par sécurité)
+        # Fusion
         at = float(session.get('area_threshold', 100.0))
-
-        # Construire un merger prêt avec le bon seuil (ne pas modifier la config ensuite)
         merger = _get_merger(area_threshold=at)
-
         merger.load_sources(stage_paths)
         result_gdf = merger.merge()
+        
         if result_gdf is None or result_gdf.empty:
             flash("Fusion vide.", "error")
             return redirect(url_for('main.home'))
 
-        # Sauvegarder le GeoJSON de résultat
-        out_geojson = results_folder / f"fusion_result_all.geojson"
+        # Sauvegarder le résultat dans un fichier
+        out_geojson = results_folder / f"fusion_result_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.geojson"
         result_gdf.to_file(out_geojson, driver="GeoJSON")
 
-        # Stocker le GeoDataFrame en session (sérialisé en JSON pour éviter les problèmes)
-        session['fusion_gdf'] = result_gdf.to_json()
+        # Stocker seulement le chemin, pas le GDF complet
+        session['fusion_file_path'] = str(out_geojson)
 
-        # Métadonnées pour la page 2
+        # Métadonnées légères
         session['fusion_result_metadata'] = {
             'export_path': str(out_geojson),
             'available_fields': _non_tech_columns(result_gdf),
@@ -227,7 +211,6 @@ def upload_files():
         logger.exception("Erreur upload/fusion inattendue")
         flash(f"Erreur lors du chargement/fusion: {str(e)}", "error")
         return redirect(url_for('main.home'))
-
 
 # Nouvelle route pour l'export des résultats de fusion
 @main_bp.route('/export_fusion', methods=['POST'])
@@ -283,40 +266,6 @@ def export_fusion():
         return redirect(url_for('main.fusion_sig'))
     
 
-# Ajout 
-@main_bp.route('/export_fusion', methods=['POST'])
-def export_fusion():
-    """Exporte les résultats de fusion"""
-    try:
-        # Vérification basique
-        if 'fusion_result_metadata' not in session:
-            flash("Aucun résultat de fusion disponible", "error")
-            return redirect(url_for('main.fusion_sig'))
-        
-        # Paramètres
-        export_format = request.form.get('format', 'geojson')
-        export_path = session['fusion_result_metadata']['export_path']
-        
-        if not os.path.exists(export_path):
-            flash("Fichier de fusion introuvable", "error")
-            return redirect(url_for('main.fusion_sig'))
-        
-        # Chargement et export
-        result_gdf = gpd.read_file(export_path)
-        file_bytes = export_gdf(export_format, result_gdf)
-        
-        # Retour du fichier
-        filename = f"fusion_zada.{'zip' if export_format == 'shp' else export_format}"
-        return send_file(
-            BytesIO(file_bytes),
-            as_attachment=True,
-            download_name=filename
-        )
-        
-    except Exception as e:
-        logger.error(f"Erreur export fusion: {e}")
-        flash(f"Erreur lors de l'export: {str(e)}", "error")
-        return redirect(url_for('main.fusion_sig'))
 
 # -------------------------------------------------------------------
 # Page 2 : UI champs + génération de carte (pas de POST de fusion ici)
@@ -329,7 +278,7 @@ def fusion_sig():
         flash("Veuillez d'abord charger des fichiers (et fusionner).", "warning")
         return redirect(url_for('main.home'))
 
-    form = FusionSIGForm()  # on réutilise seulement le select côté front (ou rien si tu préfères)
+    form = FusionSIGForm() 
     # Le front va appeler /api/fields puis /api/thematic-map/<field>
     return render_template('fusion_sig.html', form=form, loaded_files=loaded_files)
 

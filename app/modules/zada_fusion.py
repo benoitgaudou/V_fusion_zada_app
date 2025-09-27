@@ -130,7 +130,7 @@ class ZadaMerger:
         aligner = ColumnAutoAligner(AutoAlignCfg(
             fuzzy_threshold=84.0,      # 78=plus tolérant ; 88=plus strict
             join_sep=", ",
-            save_mapping_json="out/col_mapping.json",  # garde une trace du mapping
+            save_mapping_json="out/col_mapping.json", 
             load_mapping_json=None,    # ou "out/col_mapping.json" pour réappliquer un mapping validé
             auto_grow=True
         ))
