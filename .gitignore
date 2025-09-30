@@ -50,3 +50,5 @@ stage_geojson/
 Donnees/
 models/
 
+/Dockerfile
+/.dockerignore
