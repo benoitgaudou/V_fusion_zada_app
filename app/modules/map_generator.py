@@ -214,7 +214,7 @@ class MapDataGenerator:
     ) -> tuple[gpd.GeoDataFrame, dict, Optional[list[list[float]]]]:
             """
             Construit un GDF prêt à l'export à partir d'un champ 'field_name'.
-            Colonnes: id_zone (si présent), thematic_value, thematic_color, geometry (EPSG:4326).
+            Colonnes: source_names  (si présent), thematic_value, thematic_color, geometry (EPSG:4326).
             Retourne (gdf_export, legend, bounds).
             """
             res = self.generate_thematic_geojson(gdf, field_name=field_name, palette_name=palette_name)
@@ -245,11 +245,11 @@ class MapDataGenerator:
             gdf_export["thematic_value"] = series.astype(str).where(series.notna(), other="N/A")
             gdf_export["thematic_color"] = gdf_export["thematic_value"].map(color_map).fillna("#808080")
 
-            # Garder id_zone si présent
+            # Garder source_name si présent
             cols = ["thematic_value", "thematic_color", "geometry"]
-            if "id_zone" in gdf_export.columns:
-                cols = ["id_zone"] + cols
-                gdf_export["id_zone"] = gdf_export["id_zone"].astype(str)
+            if "source_name" in gdf_export.columns:
+                cols = ["source_name"] + cols
+                gdf_export["source_name"] = gdf_export["source_name"].astype(str)
 
             gdf_export = gdf_export[cols]
             return gdf_export, legend, bounds

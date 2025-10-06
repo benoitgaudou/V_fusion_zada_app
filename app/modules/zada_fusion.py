@@ -87,14 +87,6 @@ class ZadaMerger:
     # Chargement & Préparation
     # --------------------------------------------------------------------- #
     def load_sources(self, paths: Sequence[Path | str]) -> None:
-        """
-        Charge et prépare les GeoDataFrames (CRS, nettoyage, métadonnées).
-
-        Parameters
-        ----------
-        paths : Sequence[Path | str]
-            Liste de chemins vers des couches vectorielles.
-        """
         self._sources.clear()
         for idx, p in enumerate(paths):
             path = Path(p)
@@ -117,6 +109,9 @@ class ZadaMerger:
                 gdf["original_source_id"] = idx
                 gdf["original_source_name"] = path.stem
 
+                # Ajout simple du nom source sous forme z1, z2, etc.
+                gdf["source_names"] = f"z{idx + 1}"
+
                 self._sources.append(gdf)
                 logger.info("Chargé: %s (%d entités, CRS=%s)", path.name, len(gdf), gdf.crs)
             except Exception as exc:
@@ -125,19 +120,6 @@ class ZadaMerger:
         if len(self._sources) < 2:
             raise ValueError("Au moins deux sources sont nécessaires pour la fusion.")
 
-        
-        #2.  nouveau : harmonisation NLP auto (sans dictionnaire)
-        aligner = ColumnAutoAligner(AutoAlignCfg(
-            fuzzy_threshold=84.0,      # 78=plus tolérant ; 88=plus strict
-            join_sep=", ",
-            save_mapping_json="out/col_mapping.json", 
-            load_mapping_json=None,    # ou "out/col_mapping.json" pour réappliquer un mapping validé
-            auto_grow=True
-        ))
-        self._sources, self._column_analysis = aligner.transform(self._sources)
-        logger.info("Alignement auto : %d groupes – ex: %s",
-                    len(self._column_analysis.get('groups', {})),
-                    list(self._column_analysis.get('groups', {}).keys())[:10])
 
 
 
