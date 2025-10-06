@@ -6,42 +6,64 @@ import geopandas as gpd
 
 
 #________________ sélection à partir des résultats_____________
+# ---------------- sélection à partir des résultats ----------------
 def build_selection_gdf(
-    corpus_gdf :  gpd.GeoDataFrame,
+    corpus_gdf: gpd.GeoDataFrame,
     results_df: pd.DataFrame
-    ) -> gpd.GeoDataFrame:
-    """_summary_
-    Construit le GeoDataFrame exportable à partir du corpus et résultats 
-    (colonnes: id_zone, nlp_similarity, nlp_rank, nlp_rank, nlp_preview, geometry)
-
-    Args:
-        corpus_gdf (gpd.GeoDataFrame): GeoDataFrame, le résultat de la fusion NLP
-        results_df (pd.DataFrame): _description_
-
-    Returns:
-        gpd.GeoDataFrame: _description_
+) -> gpd.GeoDataFrame:
     """
-    if results_df.empty or corpus_gdf is None or corpus_gdf.empty:
-        return gpd.GeoDataFrame(columns=["id_zone", "nlp_similarity","contenu", "geometry"], 
-                                geometry="geometry", crs="EPSG:4326")
-        
+    Construit le GeoDataFrame exportable à partir du corpus et des résultats.
+    - mode semantic  -> colonne 'nlp_similarity' (0..1)
+    - mode keyword   -> colonne 'nlp_score'      (0..1, couverture AND)
+    """
+    if results_df is None or results_df.empty or corpus_gdf is None or corpus_gdf.empty:
+        return gpd.GeoDataFrame(columns=["id_zone", "geometry"], geometry="geometry", crs="EPSG:4326")
+
+    # 1) Déterminer le mode (priorité aux données du df)
+    mode = str(results_df.iloc[0].get("mode", "semantic")).lower()
+
+    # 2) Sous-ensemble géométrique dans l’ordre du ranking
     sel = corpus_gdf.iloc[results_df["row_idx"]][["id_zone", "corpus_texte", "geometry"]].copy()
     sel = sel.reset_index(drop=True)
-    sel["nlp_similarity"] = results_df["similarite"].astype(float).to_numpy()
-    sel["nlp_rank"] = pd.Series(range(1, len(sel) + 1), dtype="int32")
+
+    # 3) Colonnes communes
+    sel["nlp_rank"]    = pd.Series(range(1, len(sel) + 1), dtype="int32")
     sel["nlp_preview"] = sel["corpus_texte"].astype(str).str.slice(0, 200)
-    
-    # CRS, EPSG:4326
+    sel["nlp_mode"]    = mode
+
+    # 4) Valeur selon le mode
+    if mode == "keyword":
+        # On privilégie 'score' (déjà la couverture), sinon 'couverture'
+        if "score" in results_df.columns:
+            vals = results_df["score"].astype(float).to_numpy()
+        elif "couverture" in results_df.columns:
+            vals = results_df["couverture"].astype(float).to_numpy()
+        else:
+            vals = np.zeros(len(sel), dtype=np.float32)
+        sel["nlp_score"] = vals.astype("float32")
+        keep_cols = ["id_zone", "nlp_score", "nlp_rank", "nlp_preview", "nlp_mode", "geometry"]
+    else:
+        # semantic
+        if "similarite" in results_df.columns:
+            vals = results_df["similarite"].astype(float).to_numpy()
+        elif "score" in results_df.columns:
+            # fallback si 'score' == similarité
+            vals = results_df["score"].astype(float).to_numpy()
+        else:
+            vals = np.zeros(len(sel), dtype=np.float32)
+        sel["nlp_similarity"] = vals.astype("float32")
+        keep_cols = ["id_zone", "nlp_similarity", "nlp_rank", "nlp_preview", "nlp_mode", "geometry"]
+
+    # 5) Normalisation CRS -> EPSG:4326
     if sel.geometry.crs is not None:
         sel = sel.to_crs("EPSG:4326")
     else:
         sel.set_crs("EPSG:4326", inplace=True)
-        
-    #
+
+    # 6) Types
     sel["id_zone"] = sel["id_zone"].astype(str)
-    sel["nlp_similarity"] = sel["nlp_similarity"].astype("float32")
-    
-    return sel[["id_zone", "nlp_similarity", "nlp_rank", "nlp_preview", "geometry"]]
+
+    return sel[keep_cols]
 
 #_______________ GeoJSON ____________
 

@@ -9,7 +9,7 @@
 {% block content %}
 <div class="row">
     <div class="col-lg-4">
-        <!-- NOUVELLE SECTION : Initialisation NLP (à ajouter en premier) -->
+        <!-- SECTION : Initialisation NLP -->
         <div class="card mb-4" id="nlp-init-section" style="display: none;">
             <div class="card-header bg-warning text-dark">
                 <h6 class="card-title mb-0">
@@ -44,46 +44,66 @@
             </div>
         </div>
 
-        <!-- CARTE EXISTANTE : Recherche sémantique (modifiée) -->
+        <!-- RECHERCHE NLP -->
         <div class="card">
             <div class="card-header bg-success text-white">
                 <h4 class="card-title mb-0">
                     <i class="fas fa-search me-2"></i>
-                    Recherche sémantique
+                    Recherche NLP
                 </h4>
             </div>
             <div class="card-body">
-                <!-- FORMULAIRE MODIFIÉ avec nouveaux champs -->
                 <form id="nlpForm">
                     {{ form.hidden_tag() }}
                     
-                    <!-- CHAMPS EXISTANTS - gardés tels quels -->
+                    <!-- Requête -->
                     <div class="mb-3">
                         {{ form.query.label(class="form-label") }}
-                        {{ form.query(class="form-control") }}
+                        {{ form.query(class="form-control", placeholder="ex: elephant singe / forêts tropicales primates") }}
                         <div class="form-text">
-                            Décrivez en langage naturel ce que vous cherchez
+                            Décrivez en langage naturel ce que vous cherchez (en mode <em>keyword</em>, tous les mots doivent apparaître).
                         </div>
                     </div>
-                    
+
+                    <!-- Mode -->
                     <div class="mb-3">
+                        <label for="nlp_mode" class="form-label">Mode</label>
+                        <select id="nlp_mode" name="mode" class="form-select">
+                            <option value="semantic" selected>semantic (similarité)</option>
+                            <option value="keyword">keyword (AND, 100% si tous les mots présents)</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Seuils (affichage conditionnel) -->
+                    <div class="mb-3" id="th_sem_wrap">
                         {{ form.similarity_threshold.label(class="form-label") }}
                         <div class="input-group">
-                            {{ form.similarity_threshold(class="form-control", step="0.1", min="0", max="1") }}
-                            <span class="input-group-text">%</span>
+                            {{ form.similarity_threshold(class="form-control", step="0.01", min="0", max="1", value="0.55") }}
+                            <span class="input-group-text">[0..1]</span>
                         </div>
                         <div class="form-text">
-                            Plus le seuil est élevé, plus les résultats sont précis
+                            S’applique au mode <strong>semantic</strong> (ex: 0.55). 
+                        </div>
+                    </div>
+
+                    <div class="mb-3" id="th_kw_wrap" style="display:none;">
+                        <label for="coverage_threshold" class="form-label">Seuil couverture [0..1]</label>
+                        <div class="input-group">
+                            <input type="number" id="coverage_threshold" name="coverage_threshold" class="form-control" step="0.01" min="0" max="1" value="1.0">
+                            <span class="input-group-text">[0..1]</span>
+                        </div>
+                        <div class="form-text">
+                            S’applique au mode <strong>keyword</strong>. 1.0 = <em>tous</em> les mots requis.
                         </div>
                     </div>
                     
-                    <!-- NOUVEAUX CHAMPS ajoutés -->
+                    <!-- Nombre de résultats -->
                     <div class="mb-3">
                         <label for="max_results" class="form-label">Nombre de résultats</label>
-                        <input type="number" id="max_results" name="max_results" class="form-control" 
-                               value="10" min="1" max="50">
+                        <input type="number" id="max_results" name="max_results" class="form-control" value="50" min="1" max="200">
                     </div>
                     
+                    <!-- Affichage carte -->
                     <div class="mb-3 form-check">
                         <input type="checkbox" id="show_map" name="show_map" class="form-check-input" checked>
                         <label for="show_map" class="form-check-label">Afficher sur la carte</label>
@@ -97,37 +117,37 @@
                 <hr class="my-3">
 
                 <div class="row g-2 align-items-end">
-                <div class="col-6">
-                    <label for="fmtNlpSelect" class="form-label"><strong>Format d’export</strong></label>
-                    <select id="fmtNlpSelect" class="form-select">
-                    <option value="geojson">GeoJSON</option>
-                    <option value="gpkg">GeoPackage</option>
-                    <option value="shp">Shapefile (.zip)</option>
-                    </select>
-                </div>
-                <div class="col-6">
-                    <button id="btnExportNlp" class="btn btn-outline-success w-100">
-                    <i class="fas fa-download me-1"></i> Exporter les résultats
-                    </button>
-                    <div id="nlpExportMsg" class="form-text mt-1"></div>
-                </div>
+                  <div class="col-6">
+                      <label for="fmtNlpSelect" class="form-label"><strong>Format d’export</strong></label>
+                      <select id="fmtNlpSelect" class="form-select">
+                        <option value="geojson">GeoJSON</option>
+                        <option value="gpkg">GeoPackage</option>
+                        <option value="shp">Shapefile (.zip)</option>
+                      </select>
+                  </div>
+                  <div class="col-6">
+                      <button id="btnExportNlp" class="btn btn-outline-success w-100">
+                        <i class="fas fa-download me-1"></i> Exporter les résultats
+                      </button>
+                      <div id="nlpExportMsg" class="form-text mt-1"></div>
+                  </div>
                 </div>
                 
-                <!-- Résultats de recherche - GARDÉ TEL QUEL -->
+                <!-- Résultats -->
                 <div id="searchResults" class="mt-4" style="display: none;">
                     <div class="card">
                         <div class="card-header bg-info text-white">
                             <h6 class="card-title mb-0">Résultats trouvés</h6>
                         </div>
                         <div class="card-body" id="resultsContent">
-                            <!-- Sera rempli dynamiquement -->
+                            <!-- Injecté dynamiquement (stats + légende) -->
                         </div>
                     </div>
                 </div>
             </div>
         </div>
         
-        <!-- Exemples de requêtes - GARDÉ TEL QUEL -->
+        <!-- Exemples -->
         <div class="card mt-4">
             <div class="card-header">
                 <h6 class="card-title mb-0">
@@ -156,7 +176,7 @@
         </div>
     </div>
     
-    <!-- COLONNE DROITE - GARDÉE TELLE QUELLE -->
+    <!-- COLONNE DROITE -->
     <div class="col-lg-8">
         <div class="card">
             <div class="card-header bg-secondary text-white">
@@ -165,7 +185,7 @@
                     Résultats de recherche
                 </h4>
             </div>
-            <div class="card-body p-0">
+            <div class="card-body p-0 position-relative">
                 <div id="nlpMap" style="height: 600px; width: 100%;"></div>
                 
                 <!-- Message par défaut -->
@@ -186,7 +206,7 @@
         <!-- Barre de chargement -->
         <div id="nlpLoadingBar" class="progress mt-3" style="display: none;">
             <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 100%">
-                <i class="fas fa-brain fa-spin me-2"></i>Recherche sémantique en cours...
+                <i class="fas fa-brain fa-spin me-2"></i>Recherche en cours...
             </div>
         </div>
     </div>
@@ -200,20 +220,23 @@ let nlpCurrentLayer;
 let nlpReady = false;
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialiser la carte NLP
     initializeNLPMap();
-    
-    // Vérifier le statut NLP
     checkNLPStatus();
-    
-    // Gestionnaires
+
+    // Listeners
     document.getElementById('nlpInitForm').addEventListener('submit', handleNLPInit);
     document.getElementById('nlpForm').addEventListener('submit', handleNLPSearch);
-    
-    // Charger les modèles disponibles
-    loadAvailableModels();
-    
-    // Gestionnaires des exemples
+    document.getElementById('btnExportNlp').addEventListener('click', handleNLPExport);
+
+    // Mode switch (affiche le bon seuil)
+    const modeSel = document.getElementById('nlp_mode');
+    modeSel.addEventListener('change', () => {
+        const isKw = modeSel.value === 'keyword';
+        document.getElementById('th_kw_wrap').style.display = isKw ? '' : 'none';
+        document.getElementById('th_sem_wrap').style.display = isKw ? 'none' : '';
+    });
+
+    // Exemples
     document.querySelectorAll('.example-query').forEach(link => {
         link.addEventListener('click', function(e) {
             e.preventDefault();
@@ -221,297 +244,283 @@ document.addEventListener('DOMContentLoaded', function() {
             document.querySelector('[name="query"]').value = query;
         });
     });
+
+    // Reset backend (forcer ré-init)
+    document.getElementById('resetNLPBtn').addEventListener('click', function() {
+        nlpReady = false;
+        updateUI();
+    });
 });
 
-
+/* ---------- Backend status ---------- */
 function updateBackendDisplay() {
     fetch('/api/nlp/status')
-        .then(response => response.json())
+        .then(r => r.json())
         .then(data => {
             if (data.success && data.stats) {
                 const backendName = data.stats.backend || 'inconnu';
                 const modelUsed = data.stats.model || 'inconnu';
                 const el = document.getElementById('currentBackendDisplay');
-                if (el) {
-                    el.textContent = `Backend NLP actif: ${backendName}, Modèle : ${modelUsed}`;
-                }
+                if (el) el.textContent = `Backend NLP actif: ${backendName}, Modèle : ${modelUsed}`;
             }
         })
         .catch(e => console.error('Erreur mise à jour backend:', e));
 }
 
-
 function checkNLPStatus() {
     fetch('/api/nlp/status')
-        .then(response => response.json())
+        .then(r => r.json())
         .then(data => {
-            nlpReady = data.ready;
+            nlpReady = !!data.ready;
             updateUI();
         })
-        .catch(error => {
-            console.error('Erreur vérification statut:', error);
-            nlpReady = false;
-            updateUI();
-        });
+        .catch(_ => { nlpReady = false; updateUI(); });
 }
 
 function updateUI() {
     const initSection = document.getElementById('nlp-init-section');
     const searchCard = document.querySelector('.card .card-header.bg-success').closest('.card');
-    
-    if (nlpReady) {
-        initSection.style.display = 'none';
-        searchCard.style.display = 'block';
-    } else {
-        initSection.style.display = 'block';
-        searchCard.style.display = 'none';
-    }
+    if (nlpReady) { initSection.style.display = 'none'; searchCard.style.display = 'block'; }
+    else { initSection.style.display = 'block'; searchCard.style.display = 'none'; }
 }
 
+/* ---------- Init ---------- */
 function loadAvailableModels() {
     fetch('/api/nlp/models')
-        .then(response => response.json())
+        .then(r => r.json())
         .then(data => {
             if (data.success) {
                 const select = document.getElementById('model_selection');
                 select.innerHTML = '<option value="">Automatique</option>';
-                
-                data.models.forEach(model => {
-                    const option = document.createElement('option');
-                    option.value = model.key;
-                    option.textContent = `${model.name} ${model.exists ? '✓' : '✗ (non disponible)'}`;
-                    option.disabled = !model.exists;
-                    select.appendChild(option);
+                data.models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.key; opt.textContent = `${m.name} ${m.exists ? '✓' : '✗'}`;
+                    opt.disabled = !m.exists; select.appendChild(opt);
                 });
             }
-        })
-        .catch(error => console.error('Erreur chargement modèles:', error));
+        });
 }
+loadAvailableModels();
 
 function handleNLPInit(e) {
     e.preventDefault();
-    
-    const form = e.target;
-    const select = form.querySelector('select[name="backend"]');
-    const backend = select ? select.value : "";
-
-    const colonnes = form.querySelector('textarea[name="colonnes_exclues"]').value.trim();
-
-    // Préparer l'objet JSON
-    const payload = {
-        backend: backend,
-        colonnes_exclues: colonnes
-    };
+    const backend = document.getElementById('model_selection').value || '';
+    const colonnes = document.getElementById('colonnes_exclues').value.trim();
 
     const initBtn = document.getElementById('initBtn');
     initBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Initialisation...';
     initBtn.disabled = true;
 
     fetch('/api/nlp/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ backend, colonnes_exclues: colonnes })
     })
-    .then(response => response.json())
+    .then(r => r.json())
     .then(data => {
         if (data.success) {
-            nlpReady = true;
-            updateUI();
-            showAlert('success', `NLP initialisé avec succès! Modèle: ${data.model_used}`);
-            updateBackendDisplay();  // Ajout pour mise à jour UI
-        } else {
-            showAlert('danger', data.error || 'Erreur lors de l\'initialisation');
-        }
+            nlpReady = true; updateUI();
+            showAlert('success', `NLP initialisé ! Modèle: ${data.model_used || '—'}`);
+            updateBackendDisplay();
+        } else showAlert('danger', data.error || 'Erreur lors de l\'initialisation');
     })
-
-    .catch(error => {
-        console.error('Erreur init:', error);
-        showAlert('danger', 'Erreur de communication');
-    })
-    .finally(() => {
-        initBtn.innerHTML = '<i class="fas fa-cogs me-2"></i>Initialiser NLP';
-        initBtn.disabled = false;
-    });
+    .catch(_ => showAlert('danger', 'Erreur de communication'))
+    .finally(() => { initBtn.innerHTML = '<i class="fas fa-cogs me-2"></i>Initialiser NLP'; initBtn.disabled = false; });
 }
 
+/* ---------- Map ---------- */
 function initializeNLPMap() {
     nlpMap = L.map('nlpMap').setView([14.0583, 108.2772], 6);
-    
-    // Couche de base
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap contributors'
-    }).addTo(nlpMap);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'© OpenStreetMap'}).addTo(nlpMap);
 }
 
+function hideDefaultMessage(){ const el = document.getElementById('defaultMessage'); if (el) el.style.display='none'; }
+
+/* ---------- Search ---------- */
 function handleNLPSearch(e) {
     e.preventDefault();
-    
-    const formData = new FormData(e.target);
-    const query = formData.get('query');
-    
-    if (!query.trim()) {
-        showAlert('warning', 'Veuillez saisir une requête de recherche');
-        return;
-    }
-    
-    if (!nlpReady) {
-        showAlert('warning', 'Système NLP non initialisé');
-        return;
-    }
-    
-    // Afficher le chargement
-    showNLPLoading(true);
-    hideDefaultMessage();
-    
+
+    if (!nlpReady) { showAlert('warning','Système NLP non initialisé'); return; }
+
+    const query = (document.querySelector('[name="query"]').value || '').trim();
+    if (!query) { showAlert('warning','Veuillez saisir une requête'); return; }
+
+    const mode = document.getElementById('nlp_mode').value;
+    const maxResults = parseInt(document.getElementById('max_results').value || '50', 10);
+    const showMap = document.getElementById('show_map').checked;
+
+    // Seuils normalisés [0..1]
+    let similarity_threshold = parseFloat(document.querySelector('[name="similarity_threshold"]').value || '0.55');
+    if (similarity_threshold > 1) similarity_threshold = similarity_threshold / 100.0; // tolère saisie en %
+    let coverage_threshold = parseFloat(document.getElementById('coverage_threshold').value || '1.0');
+    if (coverage_threshold > 1) coverage_threshold = coverage_threshold / 100.0;
+
+    const payload = { query, mode, top_k: maxResults };
+    if (mode === 'semantic') payload.similarity_threshold = similarity_threshold;
+    else payload.coverage_threshold = coverage_threshold;
+
+    showNLPLoading(true); hideDefaultMessage();
+
     fetch('/api/nlp/search', {
-        method: 'POST',
-        body: formData
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
     })
-    .then(response => response.json())
+    .then(r => r.json())
     .then(data => {
         showNLPLoading(false);
-        
-        if (data.success) {
-            if (data.features && data.features.length > 0) {
-                displayNLPResults(data);
-                showAlert('success', `${data.matches} résultat(s) trouvé(s)`);
-            } else {
-                showAlert('info', 'Aucun résultat trouvé pour cette requête');
-            }
-        } else {
-            showAlert('danger', data.error || 'Erreur lors de la recherche');
-        }
+        if (!data.success) { showAlert('danger', data.error || 'Erreur lors de la recherche'); return; }
+        if (!data.geojson || !data.geojson.features) { showAlert('info','Aucun résultat'); return; }
+
+        if (showMap) renderGeoJSONOnMap(data);
+        renderStatsAndLegend(data);
+        showAlert('success', `${data.result_count || data.geojson.features.length} résultat(s) trouvé(s)`);
     })
-    .catch(error => {
-        showNLPLoading(false);
-        console.error('Erreur recherche:', error);
-        showAlert('danger', 'Erreur de communication');
-    });
+    .catch(err => { console.error(err); showNLPLoading(false); showAlert('danger','Erreur de communication'); });
 }
 
-function displayNLPResults(results) {
-    // Supprimer la couche précédente
-    if (nlpCurrentLayer) {
-        nlpMap.removeLayer(nlpCurrentLayer);
+function renderGeoJSONOnMap(data) {
+  if (nlpCurrentLayer) { nlpMap.removeLayer(nlpCurrentLayer); }
+
+  const MODE = (data.mode || 'semantic').toLowerCase();
+  const COLORS = { red:'#e74c3c', orange:'#f39c12', yellow:'#f1c40f', blue:'#3498db' };
+
+  function valueFromProps(p) {
+    if (MODE === 'semantic') {
+      if (typeof p.nlp_similarite === 'number') return p.nlp_similarite;
+      const tv = parseFloat(String(p.thematic_value || '').replace(',', '.'));
+      return isNaN(tv) ? 0 : Math.max(0, Math.min(1, tv));
+    } else {
+      if (typeof p.nlp_couverture === 'number') return p.nlp_couverture;
+      const m = String(p.thematic_value || '').match(/([\d.]+)\s*%/);
+      return m ? Math.max(0, Math.min(1, parseFloat(m[1]) / 100)) : 0;
     }
-    
-    // Ajouter les nouveaux résultats
-    nlpCurrentLayer = L.geoJSON(results.features, {
-        style: function(feature) {
-            const similarity = feature.properties.nlp_similarity || 0.5;
-            let color;
-            
-            if (similarity > 0.8) {
-                color = '#e74c3c';  // Rouge
-            } else if (similarity > 0.6) {
-                color = '#f39c12';  // Orange
-            } else if (similarity > 0.4) {
-                color = '#f1c40f';  // Jaune
-            } else {
-                color = '#3498db';  // Bleu
-            }
-            
-            return {
-                color: color,
-                fillColor: color,
-                fillOpacity: 0.6,
-                weight: 2,
-                opacity: 0.9
-            };
-        },
-        onEachFeature: function(feature, layer) {
-            const similarity = (feature.properties.nlp_similarity * 100).toFixed(1);
-            layer.bindPopup(`
-                <div class="small">
-                    <strong>Rang:</strong> #${feature.properties.nlp_rank}<br>
-                    <strong>Similarité:</strong> ${similarity}%<br>
-                    <strong>Contenu:</strong> ${feature.properties.nlp_content_preview}
-                </div>
-            `);
+  }
+  function colorFor(v){ if(v>0.80)return COLORS.red; if(v>0.60)return COLORS.orange; if(v>0.40)return COLORS.yellow; return COLORS.blue; }
+
+  nlpCurrentLayer = L.geoJSON(data.geojson, {
+    style: (feature) => {
+      const p = feature.properties || {};
+      const c = colorFor(valueFromProps(p));
+      return { color:c, fillColor:c, fillOpacity:0.6, weight:2, opacity:0.9 };
+    },
+    onEachFeature: (feature, layer) => {
+      const p = feature.properties || {};
+      const m = (p.nlp_mode || data.mode || 'semantic').toLowerCase();
+      const v = valueFromProps(p);
+      const valeurTxt = (v*100).toFixed(1) + '%';
+      const labelValeur = (m === 'semantic') ? 'Similarité' : 'Score (couverture)';
+      layer.bindPopup([
+        `<div class="small">`,
+        `<strong>ID:</strong> ${p.id_zone ?? '—'}<br>`,
+        `<strong>Mode:</strong> ${m}<br>`,
+        `<strong>${labelValeur}:</strong> ${valeurTxt}<br>`,
+        `<strong>Backend:</strong> ${p.nlp_backend ?? (data.engine?.backend || '—')}<br>`,
+        `<strong>Contenu:</strong> ${p.nlp_content_preview ?? '—'}`,
+        `</div>`
+      ].join(''));
+    }
+  }).addTo(nlpMap);
+
+  if (data.bounds && Array.isArray(data.bounds)) {
+    try { nlpMap.fitBounds(data.bounds, { padding:[12,12] }); } catch(_) {}
+  } else if (nlpCurrentLayer.getBounds().isValid()) {
+    nlpMap.fitBounds(nlpCurrentLayer.getBounds(), { padding:[12,12] });
+  }
+  // sécurise le redraw au cas où
+  setTimeout(() => { try { nlpMap.invalidateSize(); } catch(_) {} }, 50);
+}
+
+
+function renderStatsAndLegend(data) {
+  const resultsDiv = document.getElementById('searchResults');
+  const resultsContent = document.getElementById('resultsContent');
+  const mode = (data.mode || 'semantic').toLowerCase();
+
+  const COLORS = { red:'#e74c3c', orange:'#f39c12', yellow:'#f1c40f', blue:'#3498db' };
+  const metricLabel = (mode === 'semantic') ? 'Similarité' : 'Score (couverture)';
+
+  const legendItems = [
+    { color: COLORS.red,    label: `${metricLabel} : Forte (>80%)` },
+    { color: COLORS.orange, label: `${metricLabel} : Moyenne (60–80%)` },
+    { color: COLORS.yellow, label: `${metricLabel} : Faible (40–60%)` },
+    { color: COLORS.blue,   label: `${metricLabel} : Très faible (<40%)` },
+  ];
+
+  const legendHtml = legendItems.map(it => `
+    <div class="d-inline-flex align-items-center me-2 mb-2"
+         style="background:#f8f9fa;border:1px solid #dee2e6;border-radius:8px;padding:4px 8px;">
+      <span style="display:inline-block;width:14px;height:14px;border-radius:4px;background:${it.color};
+                   border:1px solid rgba(0,0,0,.2);margin-right:6px;"></span>
+      <span class="small">${it.label}</span>
+    </div>
+  `).join('');
+
+  const statsHtml = `
+    <div class="mb-2 small">
+      <strong>Requête:</strong> "${data.query || '—'}"<br>
+      <strong>Mode:</strong> ${mode}<br>
+      <strong>Résultats:</strong> ${data.result_count || (data.geojson?.features?.length ?? 0)}<br>
+      <strong>Moteur:</strong> ${(data.engine?.backend || '—')} • ${(data.engine?.model || '—')}
+    </div>
+    <div class="mt-2"><strong>Légende</strong></div>
+    <div class="mt-1">${legendHtml}</div>
+  `;
+
+  resultsContent.innerHTML = statsHtml;
+  resultsDiv.style.display = 'block';
+}
+
+
+/* ---------- Export ---------- */
+function handleNLPExport(e) {
+    e.preventDefault();
+    const fmt = document.getElementById('fmtNlpSelect').value;
+    const query = (document.querySelector('[name="query"]').value || '').trim();
+    const mode = document.getElementById('nlp_mode').value;
+    const top_k = parseInt(document.getElementById('max_results').value || '50', 10);
+
+    if (!query) { showAlert('warning','Requête vide'); return; }
+
+    fetch('/api/nlp/export', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ fmt, query, mode, top_k })
+    })
+    .then(async resp => {
+        if (!resp.ok) {
+            const err = await resp.json().catch(()=>({error:'Erreur export'}));
+            showAlert('danger', err.error || 'Erreur export');
+            return;
         }
-    }).addTo(nlpMap);
-    
-    // Ajuster la vue
-    nlpMap.fitBounds(nlpCurrentLayer.getBounds());
-    
-    // Afficher les statistiques
-    showNLPStats(results);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().replace(/[-:T.Z]/g,'').slice(0,14);
+        a.href = url;
+        a.download = `zada_nlp_${stamp}.${fmt === 'shp' ? 'zip' : fmt}`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        document.getElementById('nlpExportMsg').textContent = 'Export réussi.';
+    })
+    .catch(_ => showAlert('danger','Erreur de communication pendant export'));
 }
 
-function showNLPStats(results) {
-    const resultsDiv = document.getElementById('searchResults');
-    const resultsContent = document.getElementById('resultsContent');
-    
-    const statsHtml = `
-        <div class="mb-3">
-            <strong>Requête:</strong> "${results.query}"<br>
-            <strong>Correspondances trouvées:</strong> ${results.matches}
-        </div>
-        <div class="small">
-            <div class="d-flex align-items-center mb-1">
-                <div style="width: 15px; height: 15px; background-color: #e74c3c; margin-right: 8px;"></div>
-                <span>Forte similarité (>80%)</span>
-            </div>
-            <div class="d-flex align-items-center mb-1">
-                <div style="width: 15px; height: 15px; background-color: #f39c12; margin-right: 8px;"></div>
-                <span>Similarité moyenne (60-80%)</span>
-            </div>
-            <div class="d-flex align-items-center mb-1">
-                <div style="width: 15px; height: 15px; background-color: #f1c40f; margin-right: 8px;"></div>
-                <span>Similarité faible (40-60%)</span>
-            </div>
-            <div class="d-flex align-items-center">
-                <div style="width: 15px; height: 15px; background-color: #3498db; margin-right: 8px;"></div>
-                <span>Très faible similarité (<40%)</span>
-            </div>
-        </div>
-    `;
-    
-    resultsContent.innerHTML = statsHtml;
-    resultsDiv.style.display = 'block';
-}
-
+/* ---------- UI helpers ---------- */
 function showNLPLoading(show) {
     const loadingBar = document.getElementById('nlpLoadingBar');
     const searchBtn = document.getElementById('searchBtn');
-    
-    if (show) {
-        loadingBar.style.display = 'block';
-        searchBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Recherche...';
-        searchBtn.disabled = true;
-    } else {
-        loadingBar.style.display = 'none';
-        searchBtn.innerHTML = '<i class="fas fa-search me-2"></i>Rechercher';
-        searchBtn.disabled = false;
-    }
+    if (show) { loadingBar.style.display='block'; searchBtn.innerHTML='<i class="fas fa-spinner fa-spin me-2"></i>Recherche...'; searchBtn.disabled=true; }
+    else { loadingBar.style.display='none'; searchBtn.innerHTML='<i class="fas fa-search me-2"></i>Rechercher'; searchBtn.disabled=false; }
 }
-
-function hideDefaultMessage() {
-    document.getElementById('defaultMessage').style.display = 'none';
-}
-  document.getElementById('resetNLPBtn').addEventListener('click', function() {
-    nlpReady = false;
-    updateUI();
-  });
 
 function showAlert(type, message) {
     const alertDiv = document.createElement('div');
     alertDiv.className = `alert alert-${type} alert-dismissible fade show`;
-    alertDiv.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
-    // Insérer au début de la première colonne
+    alertDiv.innerHTML = `${message}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>`;
     const firstCol = document.querySelector('.col-lg-4');
     firstCol.insertBefore(alertDiv, firstCol.firstChild);
-    
-    // Auto-dismiss après 5 secondes
-    setTimeout(() => {
-        if (alertDiv.parentNode) {
-            alertDiv.remove();
-        }
-    }, 5000);
+    setTimeout(() => { if (alertDiv.parentNode) alertDiv.remove(); }, 5000);
 }
 </script>
 {% endblock %}
