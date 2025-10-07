@@ -322,7 +322,7 @@ class NLPEngine:
         if df.empty or self.corpus_gdf is None:
             return {"type": "FeatureCollection", "features": []}, {"type": "continuous", "items": []}, None
 
-        # Quelle valeur cartographier ?
+        # Choix de la métrique à afficher
         if "score" in df.columns and (df["score"].notna().any()):
             values = df["score"].to_numpy()
             thematic_field = "score"

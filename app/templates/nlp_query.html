@@ -59,7 +59,7 @@
                     <!-- Requête -->
                     <div class="mb-3">
                         {{ form.query.label(class="form-label") }}
-                        {{ form.query(class="form-control", placeholder="ex: elephant singe / forêts tropicales primates") }}
+                        {{ form.query(class="form-control", placeholder="ex: feux de forêt ") }}
                         <div class="form-text">
                             Décrivez en langage naturel ce que vous cherchez (en mode <em>keyword</em>, tous les mots doivent apparaître).
                         </div>
@@ -70,7 +70,7 @@
                         <label for="nlp_mode" class="form-label">Mode</label>
                         <select id="nlp_mode" name="mode" class="form-select">
                             <option value="semantic" selected>semantic (similarité)</option>
-                            <option value="keyword">keyword (AND, 100% si tous les mots présents)</option>
+                            <option value="keyword">keyword </option>
                         </select>
                     </div>
                     

@@ -434,9 +434,8 @@ def api_export_thematic_map(field_name):
 
 
 # -------------------------------------------------------------------
-# NLP Pour la Recherche Sémantique
+# NLP Pour la Recherche Sémantique + Apparition de mots-clés 
 # -------------------------------------------------------------------
-
 
 from app.modules.nlp import nlp_engine
 from app.modules.nlp.api import init_from_fusion_export, semantic_search
@@ -642,13 +641,11 @@ def api_nlp_export():
             m0 = str(df.iloc[0]["mode"]).lower()
             df["mode"] = m0 if m0 in {"semantic","keyword"} else mode
 
-        # Ne PAS forcer score->similarite globalement !
         # On ne crée 'similarite' que si le mode est semantic et qu'il manque, en la dupliquant depuis score.
         if df.iloc[0]["mode"] == "semantic" and "similarite" not in df.columns and "score" in df.columns:
             df["similarite"] = df["score"]
 
         # En mode keyword, build_selection_gdf lira 'score' (ou 'couverture') → nlp_score
-        # Donc rien à faire de plus.
 
     else:
         # Export direct depuis une requête
