@@ -19,8 +19,6 @@ from shapely.ops import unary_union
 
 # Ajout de l'utilisation de NLP pour harmoniser les colonnes
 from app.modules.column_auto_align import ColumnAutoAligner, AutoAlignCfg
-#from app.modules.column_analyzer import ColumnAnalyzer, ColumnAlignConfig
-
 
 
 # --- Configuration logging minimale (modifie le niveau dans ton script principal) ---
