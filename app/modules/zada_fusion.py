@@ -1,6 +1,5 @@
-#  Fusion zada qui marche bien mais la superposition 
-
 # zada_merger.py
+
 from __future__ import annotations
 import re
 import unicodedata
