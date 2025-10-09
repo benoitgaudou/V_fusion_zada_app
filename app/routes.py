@@ -304,11 +304,6 @@ def api_fields_analysis():
             sample = list(s.dropna().unique()[:5])
             unique_count = s.nunique(dropna=True)
             
-            # Appel correct de la méthode statique
-            #sample = ZadaMerger._convert_numpy_types(sample)
-            #unique_count = ZadaMerger._convert_numpy_types(unique_count)
-            # Utilisation de l'ancien algorithme juste l'intersection par pair et la différence en commentant les deux lignes d'avant
-            
             
             fields.append({
                 'name': col,
