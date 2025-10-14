@@ -18,7 +18,7 @@ import os
 
 from app.forms import FileUploadForm, FusionSIGForm, NLPQueryForm
 from app.modules.file_loader import FileLoader, FileLoaderConfig
-from app.modules.zada_fusion import ZadaMerger, MergeConfig
+from app.modules.fusion import ZadaMerger, MergeConfig
 from app.modules.map_generator import MapDataGenerator
 from app.modules.exceptions import ZADAException, FileLoadingError
 from app.modules.nlp.card_exports import export_gdf
