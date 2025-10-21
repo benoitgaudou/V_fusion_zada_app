@@ -3,7 +3,6 @@ env_zada/
 env_apZD/
 flask_env/
 venv/
-
 # PyCharm or VSCode project files
 .vscode/
 .idea/
@@ -46,9 +45,7 @@ Thumbs.db
 uploads/
 out/
 results/
+models/
 stage_geojson/
 Donnees/
-models/
-
-/Dockerfile
 /.dockerignore
