@@ -19,7 +19,7 @@ from werkzeug.utils import secure_filename
 
 try:
     from .exceptions import FileLoadingError
-except Exception:  # fallback si import relatif indispo (tests)
+except Exception:  
     class FileLoadingError(RuntimeError):
         pass
 

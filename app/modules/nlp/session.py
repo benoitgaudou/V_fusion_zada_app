@@ -1,6 +1,8 @@
 # app/modules/nlp/session.py
 from __future__ import annotations
 import json
+import re
+import unicodedata
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 import numpy as np
@@ -33,6 +35,10 @@ class NLPEngine:
         self.doc_embeddings: Optional[np.ndarray] = None
         self.current_model_name: str = "N/A"
         self.backend: str = self._pick_backend()
+        self.corpus_plain: Optional[list[str]] = None
+        # NEW: tokens/doc pour recherche mots-clés
+        self.corpus_tokens: Optional[list[set[str]]] = None
+
 
     # ----------------- Choix du backend -----------------
     def _pick_backend(self) -> str:
@@ -168,6 +174,24 @@ class NLPEngine:
     # ----------------- Initialisation depuis un GDF de fusion -----------------
     def init_from_fusion_gdf(self, gdf_fusion: gpd.GeoDataFrame) -> Dict[str, Any]:
         self.corpus_gdf = build_corpus_from_fusion_gdf(gdf_fusion)
+        
+        texts = self.corpus_gdf["corpus_texte"].fillna("").tolist()
+        self.corpus_tokens = [set(tokens_from_corpus(t)) for t in texts]
+        
+        # NEW: texte normalisé "plain" (tolérant à la ponctuation)
+        def _normalize_plain(s: str) -> str:
+            if not isinstance(s, str):
+                s = "" if s is None else str(s)
+            s = s.lower()
+            s = unicodedata.normalize("NFKD", s)
+            s = "".join(ch for ch in s if not unicodedata.combining(ch))
+            # Remplace toute ponctuation/séparateur par des espaces
+            s = re.sub(r"[^a-z0-9]+", " ", s)
+            s = re.sub(r"\s+", " ", s).strip()
+            return s
+
+        self.corpus_plain = [_normalize_plain(t) for t in texts]
+
 
         # Branche ST : encode tout le corpus directement
         if self.backend == "sentence_transformers":
@@ -211,40 +235,114 @@ class NLPEngine:
             "model": self.current_model_name
         }
 
+    def _keyword_coverage(self, query: str) -> np.ndarray:
+        """
+        Fraction de mots de la requête présents (0..1).
+        1.0 uniquement si TOUS les mots sont présents (AND).
+        Tolère les séparateurs + / - _ , ; : grâce à corpus_plain.
+        """
+        if not self.corpus_tokens:
+            return np.zeros(0, dtype=np.float32)
+
+        q_tokens = [t for t in tokens_from_corpus(query) if t]
+        q_tokens = list(dict.fromkeys(q_tokens))  # uniques
+        if len(q_tokens) == 0:
+            return np.zeros(len(self.corpus_tokens), dtype=np.float32)
+
+        cover = np.zeros(len(self.corpus_tokens), dtype=np.float32)
+        for i, doc_tok in enumerate(self.corpus_tokens):
+            plain = self.corpus_plain[i] if self.corpus_plain and i < len(self.corpus_plain) else ""
+            plain_set = set(plain.split()) if plain else set()
+            found = 0
+            for tok in q_tokens:
+                if tok in doc_tok or tok in plain_set:
+                    found += 1
+            cover[i] = found / float(len(q_tokens))
+        return cover
+
     # ----------------- Recherche -----------------
-    def search(self, query: str, top_k: int = 50) -> pd.DataFrame:
-        if not self.is_ready or self.corpus_gdf is None or self.doc_embeddings is None:
+    def search(self, query: str, top_k: int = 50, mode: str = "semantic") -> pd.DataFrame:
+        """
+        Recherche NLP selon deux modes :
+        - mode="keyword"  : score = couverture des mots-clés (AND). 100% si tous les mots saisis sont présents.
+        - mode="semantic" : score = similarité cosinus (comme avant).
+        Retourne un DataFrame avec les colonnes : row_idx, id_zone, score, similarite, couverture, mode.
+        """
+        if not self.is_ready or self.corpus_gdf is None:
             return pd.DataFrame()
 
-        # Embedding de la requête selon le backend
-        if self.backend == "sentence_transformers":
-            qv = self._embed_texts_st([query])  # (1, d)
-        else:
-            kv = self._load_kv()
-            toks = tokens_from_corpus(query)
-            vecs = [kv[w] for w in toks if kv is not None and w in kv]
-            if not vecs:
-                return pd.DataFrame()
-            qv = np.mean(vecs, axis=0, dtype=np.float32).reshape(1, -1)
+        mode = (mode or "semantic").strip().lower()
+        if mode not in {"semantic", "keyword"}:
+            mode = "semantic"
 
-        sims = cosine_similarity(qv, self.doc_embeddings)[0]
-        idx = np.argsort(sims)[::-1][:top_k]
+        # 1️ Couverture mots-clés (0..1)
+        coverage = self._keyword_coverage(query)
+
+        # 2️ Similarité sémantique si demandée
+        if mode == "semantic":
+            if self.backend == "sentence_transformers":
+                qv = self._embed_texts_st([query])
+            else:
+                kv = self._load_kv()
+                toks = tokens_from_corpus(query)
+                vecs = [kv[w] for w in toks if kv is not None and w in kv]
+                if not vecs:
+                    return pd.DataFrame()
+                qv = np.mean(vecs, axis=0, dtype=np.float32, keepdims=True)
+
+            sim_full = cosine_similarity(qv, self.doc_embeddings)[0]
+            # re-normalisation [0,1]
+            sim = ((sim_full + 1.0) / 2.0).astype(np.float32)
+            score = sim.copy()
+
+        # 3️ Mode mots-clés (100% si tous les mots présents)
+        else:  # mode == "keyword"
+            sim = np.zeros(len(self.corpus_gdf), dtype=np.float32)
+            score = coverage.copy()
+
+        # 4️ Tri
+        idx = np.argsort(score)[::-1][:top_k]
         return pd.DataFrame({
             "row_idx": idx,
             "id_zone": self.corpus_gdf.iloc[idx]["id_zone"].to_numpy(),
-            "similarite": sims[idx]
+            "score": score[idx],
+            "similarite": sim[idx],
+            "couverture": coverage[idx],
+            "mode": [mode] * len(idx),
         })
+
 
     # ----------------- Sortie GeoJSON -----------------
     def to_geojson(self, df: pd.DataFrame):
+        """
+        Style la carte avec la colonne 'score' si présente (mode 'keyword'),
+        sinon retombe sur 'similarite' (mode 'semantic').
+        La légende est recalculée sur la métrique affichée.
+        """
         if df.empty or self.corpus_gdf is None:
             return {"type": "FeatureCollection", "features": []}, {"type": "continuous", "items": []}, None
 
-        sel = self.corpus_gdf.iloc[df["row_idx"]][["id_zone", "corpus_texte", "geometry"]].reset_index(drop=True)
-        sel["similarite"] = df["similarite"].to_numpy()
-        legend = legend_from_scores(sel["similarite"].to_numpy(), classes=6)
+        # Choix de la métrique à afficher
+        if "score" in df.columns and (df["score"].notna().any()):
+            values = df["score"].to_numpy()
+            thematic_field = "score"
+            value_fmt = lambda v: f"{float(v)*100:.1f}%"
+        else:
+            values = df["similarite"].to_numpy()
+            thematic_field = "similarite"
+            value_fmt = lambda v: f"{float(v):.3f}"
 
-        # bornes pour trouver la couleur
+        # Sous-ensemble géométrique dans l’ordre du ranking
+        sel = self.corpus_gdf.iloc[df["row_idx"]][["id_zone", "corpus_texte", "geometry"]].reset_index(drop=True)
+        sel["__val__"] = values
+
+        # Légende basée sur la métrique choisie
+        vals = sel["__val__"].to_numpy().astype(float)
+        uniq = np.unique(np.round(vals, 6))
+        classes = int(max(1, min(6, uniq.size)))  # ≤ nb de valeurs distinctes
+        legend = legend_from_scores(vals, classes=classes)
+
+        # bornes/couleurs pour coloriser
         items = legend["items"]
         bounds = [float(it["label"].split(" - ")[0]) for it in items] + [legend["max_value"]]
         colors = [it["color"] for it in items]
@@ -256,26 +354,34 @@ class NLPEngine:
             return colors[-1]
 
         feats = []
-        for _, r in sel.iterrows():
-            col = color_for(float(r["similarite"]))
+        for i, r in sel.iterrows():
+            col = color_for(float(r["__val__"]))
             props = {
                 "id_zone": r["id_zone"],
-                "nlp_similarity": float(r["similarite"]),
-                "nlp_rank": None,  # l’UI peut ordonner par similarité
-                "nlp_content_preview": str(r["corpus_texte"])[:200],
-                "style": {"fillColor": col, "color": col, "fillOpacity": 0.7, "weight": 2, "opacity": 0.9},
-                "thematic_field": "similarite",
-                "thematic_value": f"{float(r['similarite']):.3f}",
-                # meta utiles pour debug/UI
                 "nlp_backend": self.backend,
                 "nlp_model": self.current_model_name,
+                "nlp_content_preview": str(r["corpus_texte"])[:200],
+                "thematic_field": thematic_field,      # 'score' (keyword) ou 'similarite' (semantic)
+                "thematic_value": value_fmt(r["__val__"]),
+                "style": {"fillColor": col, "color": col, "fillOpacity": 0.7, "weight": 2, "opacity": 0.9},
             }
+
+            # ➜ N'expose 'nlp_similarite' que si mode=semantic
+            row_mode = str(df.iloc[i]["mode"]) if "mode" in df.columns else "semantic"
+            props["nlp_mode"] = row_mode
+            if "couverture" in df.columns:
+                props["nlp_couverture"] = float(df.iloc[i]["couverture"])
+            if row_mode == "semantic" and "similarite" in df.columns:
+                props["nlp_similarite"] = float(df.iloc[i]["similarite"])
+
             gj = json.loads(gpd.GeoSeries([r.geometry], crs="EPSG:4326").to_json())["features"][0]["geometry"]
             feats.append({"type": "Feature", "properties": props, "geometry": gj})
+
 
         tb = self.corpus_gdf.total_bounds
         leaflet_bounds = [[tb[1], tb[0]], [tb[3], tb[2]]]
         return {"type": "FeatureCollection", "features": feats}, legend, leaflet_bounds
+
 
     # ----------------- Statut -----------------
     def stats(self) -> Dict[str, Any]:

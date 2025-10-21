@@ -18,7 +18,7 @@ import os
 
 from app.forms import FileUploadForm, FusionSIGForm, NLPQueryForm
 from app.modules.file_loader import FileLoader, FileLoaderConfig
-from app.modules.zada_fusion import ZadaMerger, MergeConfig
+from app.modules.fusion import ZadaMerger, MergeConfig
 from app.modules.map_generator import MapDataGenerator
 from app.modules.exceptions import ZADAException, FileLoadingError
 from app.modules.nlp.card_exports import export_gdf
@@ -304,11 +304,6 @@ def api_fields_analysis():
             sample = list(s.dropna().unique()[:5])
             unique_count = s.nunique(dropna=True)
             
-            # Appel correct de la méthode statique
-            #sample = ZadaMerger._convert_numpy_types(sample)
-            #unique_count = ZadaMerger._convert_numpy_types(unique_count)
-            # Utilisation de l'ancien algorithme juste l'intersection par pair et la différence en commentant les deux lignes d'avant
-            
             
             fields.append({
                 'name': col,
@@ -434,9 +429,8 @@ def api_export_thematic_map(field_name):
 
 
 # -------------------------------------------------------------------
-# NLP Pour la Recherche Sémantique
+# NLP Pour la Recherche Sémantique + Apparition de mots-clés 
 # -------------------------------------------------------------------
-
 
 from app.modules.nlp import nlp_engine
 from app.modules.nlp.api import init_from_fusion_export, semantic_search
@@ -473,47 +467,97 @@ def api_nlp_search():
     if not meta or not meta.get('export_path'):
         return jsonify({'success': False, 'error': "Aucun résultat de fusion en session."}), 400
 
-    # Accepte JSON OU form-data (fallback)
     data = request.get_json(silent=True) or request.form
 
-    # --- Requête ---
+    # Requête
     q = (data.get('query') or '').strip()
     if not q:
         return jsonify({'success': False, 'error': 'Requête vide'}), 400
 
-    # --- Top-K : compat "max_results" OU "top_k" ---
-    #   - priorise "top_k" si présent
+    # top_k (compat max_results)
     raw_topk = data.get('top_k', data.get('max_results', 10))
     try:
         top_k = int(raw_topk)
     except (TypeError, ValueError):
         top_k = 10
-    # bornes raisonnables
     top_k = max(1, min(200, top_k))
 
-    # --- Seuil de similarité (NOUVEAU) ---
-    raw_thresh = data.get('similarity_threshold', 0.5)
-    try:
-        similarity_threshold = float(raw_thresh)
-    except (TypeError, ValueError):
-        similarity_threshold = 0.5
-    # clamp dans [0,1]
-    similarity_threshold = max(0.0, min(1.0, similarity_threshold))
+    # mode
+    mode = (data.get('mode') or 'semantic').strip().lower()
+    if mode not in {'semantic', 'keyword'}:
+        mode = 'semantic'
+
+    # seuils
+    def _clamp01(x, default):
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            v = default
+        return max(0.0, min(1.0, v))
+
+    similarity_threshold = _clamp01(data.get('similarity_threshold', 0.5), 0.5)
+    coverage_threshold   = _clamp01(data.get('coverage_threshold',   0.0), 0.0)
 
     try:
-        result = semantic_search(
-            export_path=meta['export_path'],
-            query=q,
-            top_k=top_k,
-            similarity_threshold=similarity_threshold
-        )
-        # Si ta fonction renvoie success=False, renvoie 200 ou 500 ? Ici: 200 si c'est un échec "métier", 500 si exception
-        status = 200 if result.get('success', False) else 200
-        return jsonify(result), status
+        # 1) moteur
+        eng = _get_engine(meta['export_path'])
+
+        # 2) recherche -> df défini ici
+        df = eng.search(query=q, top_k=top_k, mode=mode)
+        if df is None:
+            df = pd.DataFrame()
+
+        # 3) si vide: réponse vide propre
+        if df.empty:
+            return jsonify({
+                'success': True,
+                'mode': mode,
+                'query': q,
+                'top_k': top_k,
+                'similarity_threshold': similarity_threshold,
+                'coverage_threshold': coverage_threshold,
+                'result_count': 0,
+                'engine': eng.stats(),
+                'legend': {'type': 'continuous', 'items': []},
+                'bounds': None,
+                'geojson': {'type': 'FeatureCollection', 'features': []},
+            }), 200
+
+        # 4) filtrage par mode
+        if mode == 'semantic':
+            # score = similarité (renormalisée)
+            if 'score' not in df.columns:
+                df['score'] = df.get('similarite', 0.0)
+            df = df[df['score'] >= similarity_threshold]
+        else:
+            # keyword: filtrer sur la COUVERTURE (AND)
+            if 'couverture' not in df.columns:
+                df['couverture'] = 0.0
+            df = df[df['couverture'] >= coverage_threshold]
+
+        df = df.reset_index(drop=True)
+
+        # 5) GeoJSON + légende + bounds
+        geojson, legend, bounds = eng.to_geojson(df)
+
+        return jsonify({
+            'success': True,
+            'mode': mode,
+            'query': q,
+            'top_k': top_k,
+            'similarity_threshold': similarity_threshold,
+            'coverage_threshold': coverage_threshold,
+            'result_count': int(df.shape[0]),
+            'engine': eng.stats(),
+            'legend': legend,
+            'bounds': bounds,
+            'geojson': geojson,
+        }), 200
 
     except Exception as e:
         current_app.logger.exception("api_nlp_search")
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
     
 @main_bp.route('/api/nlp/models', methods=['GET'])
@@ -547,16 +591,17 @@ from app.modules.nlp.card_exports import (
     export_shapefile_zip,        # idem
 )
 
-# Export NLP 
+# Export NLP
 @main_bp.route("/api/nlp/export", methods=["POST"])
 def api_nlp_export():
     """
     Body JSON:
     {
       "fmt": "shp" | "gpkg" | "geojson",
-      "top_k": 100,                 # optionnel
-      "query": "texte",             # optionnel si export direct depuis une requête
-      "rows": [{"row_idx":0,"similarite":0.91}, ...]   # optionnel si déjà calculé côté client
+      "top_k": 100,                 # optionnel si 'query' fourni
+      "query": "texte",             # optionnel si 'rows' fourni
+      "mode": "semantic"|"keyword", # le mode à exporter
+      "rows": [{"row_idx":0,"score":1.0}, ...]   # ou [{"row_idx":0,"similarite":0.91}, ...]
     }
     """
     meta = session.get('fusion_result_metadata')
@@ -566,26 +611,47 @@ def api_nlp_export():
     payload = request.get_json(force=True) or {}
     fmt = (payload.get("fmt") or "").lower()
     top_k = int(payload.get("top_k", 100))
+    mode = (payload.get("mode") or "semantic").strip().lower()
+    if mode not in {"semantic", "keyword"}:
+        mode = "semantic"
 
-    # Récupère le bon moteur NLP lié au fichier en session
+    # Récupère le moteur lié au fichier en session
     try:
         eng = _get_engine(meta['export_path'])
     except Exception as e:
         current_app.logger.exception("api_nlp_export/_get_engine")
         return jsonify({'success': False, 'error': f"Moteur NLP indisponible: {e}"}), 500
 
-    # Construit le DataFrame des résultats
+    # Construire le DataFrame des résultats
     if "rows" in payload and payload["rows"]:
         df = pd.DataFrame(payload["rows"])
-        if df.empty or not {"row_idx", "similarite"}.issubset(df.columns):
-            return jsonify({'success': False, 'error': "rows doit contenir row_idx et similarite."}), 400
+        if df.empty or "row_idx" not in df.columns:
+            return jsonify({'success': False, 'error': "rows doit contenir au moins 'row_idx'."}), 400
+
+        # Assure la présence de la colonne 'mode' (utilisée par build_selection_gdf)
+        if "mode" not in df.columns:
+            df["mode"] = mode
+        else:
+            # normalise la première valeur et applique à tout le df
+            m0 = str(df.iloc[0]["mode"]).lower()
+            df["mode"] = m0 if m0 in {"semantic","keyword"} else mode
+
+        # On ne crée 'similarite' que si le mode est semantic et qu'il manque, en la dupliquant depuis score.
+        if df.iloc[0]["mode"] == "semantic" and "similarite" not in df.columns and "score" in df.columns:
+            df["similarite"] = df["score"]
+
+        # En mode keyword, build_selection_gdf lira 'score' (ou 'couverture') → nlp_score
+
     else:
+        # Export direct depuis une requête
         q = (payload.get("query") or "").strip()
         if not q:
             return jsonify({'success': False, 'error': "query vide (ou fournissez 'rows')."}), 400
-        df = eng.search(q, top_k=top_k)
+
+        df = eng.search(q, top_k=top_k, mode=mode)
         if df.empty:
             return jsonify({'success': False, 'error': "Aucun résultat pour la requête."}), 400
+        # df contient déjà 'mode', 'score' et, en semantic, 'similarite' ; on ne touche à rien
 
     try:
         data = export_from_results(fmt, eng.corpus_gdf, df, layer="zada_nlp")
@@ -596,10 +662,11 @@ def api_nlp_export():
         return jsonify({'success': False, 'error': f"Erreur export: {e}"}), 500
 
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    suffix = f"{mode}_{stamp}"
     filenames = {
-        "shp":    f"zada_nlp_{stamp}.shp.zip",
-        "gpkg":   f"zada_nlp_{stamp}.gpkg",
-        "geojson":f"zada_nlp_{stamp}.geojson",
+        "shp":    f"zada_nlp_{suffix}.shp.zip",
+        "gpkg":   f"zada_nlp_{suffix}.gpkg",
+        "geojson":f"zada_nlp_{suffix}.geojson",
     }
     mimes = {
         "shp":    "application/zip",
@@ -610,7 +677,7 @@ def api_nlp_export():
         io.BytesIO(data),
         mimetype=mimes.get(fmt, "application/octet-stream"),
         as_attachment=True,
-        download_name=filenames.get(fmt, f"zada_nlp_{stamp}.bin"),
+        download_name=filenames.get(fmt, f"zada_nlp_{suffix}.bin"),
     )
 
 

@@ -3,13 +3,14 @@
 # ============================================================================
 
 from flask import Flask
-from app.config import Config
+from app.config import config
 import os
 
-def create_app():
-    """Factory pattern pour créer l'application Flask"""
+def create_app(config_name='default'):
+    """Factory pattern pour créer l'application Flask avec config dynamique"""
+    
     app = Flask(__name__)
-    app.config.from_object(Config)
+    app.config.from_object(config[config_name])  # ← utiliser le dict 'config'
     
     # Création des dossiers nécessaires
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -19,7 +20,8 @@ def create_app():
     from app.routes import main_bp
     app.register_blueprint(main_bp)
     
-    print(app.url_map)
+    #Affichage des routes pour debug
+    #print(app.url_map)
     
     return app
 
