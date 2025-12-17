@@ -38,7 +38,9 @@ sudo apt-get install -y gdal-bin libgdal-dev libspatialindex-dev
 ```bash
 brew install gdal
 brew install spatialindex
-```*Sur Windows :**  
+```
+
+**Sur Windows :**  
 Téléchargez et installez GDAL et libspatialindex via les wheel (.whl) si besoin.
 
 ### 4. Installer les dépendances Python
@@ -78,4 +80,5 @@ Les chemins de dossiers et paramètres sont configurables dans `config.py` ou vi
 
 - Si GeoPandas/Shapely ne s'installent pas, vérifiez la présence de GDAL et libspatialindex.
 - Pour les erreurs d'import, assurez-vous d'être dans le bon dossier et d'avoir activé l'environnement virtuel.
+
 
