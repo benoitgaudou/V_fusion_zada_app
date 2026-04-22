@@ -34,4 +34,10 @@ jobs:
       run: |
         # stop the build if there are Python syntax errors or undefined names
         # pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" --add-data "models:models" run.py 
-        pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" run.py 
+        pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" run.py     
+
+    - name: Create Release and Upload APK
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: D:\a\V_fusion_zada_app\V_fusion_zada_app\dist/*
