@@ -33,4 +33,5 @@ jobs:
     - name: Build release
       run: |
         # stop the build if there are Python syntax errors or undefined names
-        pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" --add-data "models:models" run.py 
+        # pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" --add-data "models:models" run.py 
+        pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" run.py 
