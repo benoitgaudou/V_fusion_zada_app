@@ -11,7 +11,7 @@ on:
   workflow_dispatch: # Allows manual triggering
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -42,4 +42,4 @@ jobs:
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ github.sha }}
-        files: D:\a\V_fusion_zada_app\V_fusion_zada_app\dist/*
+        files: dist/*
