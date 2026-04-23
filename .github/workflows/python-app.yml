@@ -48,8 +48,7 @@ jobs:
       run: |
         # stop the build if there are Python syntax errors or undefined names
         # pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" --add-data "models:models" run.py 
-        pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" run.py     
-
+        pyinstaller --onefile --add-data "app/templates:app/templates" --add-data "app/static:app/static" run.py --exclude-module torch --exclude-module torchvision
     - name: Create Release and Upload APK
       if: "github.event_name == 'workflow_dispatch'"
       uses: softprops/action-gh-release@v3
