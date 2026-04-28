@@ -49,3 +49,4 @@ models/
 stage_geojson/
 Donnees/
 /.dockerignore
+/.venv
