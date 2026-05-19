@@ -226,7 +226,7 @@ class FileLoader:
     def _find_first_shp(extract_dir: Path) -> Optional[Path]:
         for root, _, files in os.walk(extract_dir):
             for f in files:
-                if f.lower().endswith(".shp"):
+                if f.lower().endswith(".shp") and not f.startswith("."):
                     return Path(root) / f
         return None
 
