@@ -1,24 +1,20 @@
-# zada_merger.py
-
 from __future__ import annotations
-import re
-import unicodedata
 
 import logging
 import warnings
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple, Dict, Any
+import re
+import unicodedata
 
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, base as shapely_base
 from shapely.ops import unary_union
 
+from app.modules.merger.config import MergeConfig
+from typing import List, Optional, Sequence, Tuple, Dict, Any
+from pathlib import Path
 
-# Ajout de l'utilisation de NLP pour harmoniser les colonnes
-from app.modules.column_auto_align import ColumnAutoAligner, AutoAlignCfg
-
+from app.modules.merger.base_merger import BaseMerger
 
 # --- Configuration logging minimale (modifie le niveau dans ton script principal) ---
 logger = logging.getLogger(__name__)
@@ -34,36 +30,7 @@ logger.setLevel(logging.INFO)
 warnings.filterwarnings("ignore")
 
 
-@dataclass(frozen=True)
-class MergeConfig:
-    """
-    Paramètres de fusion ZADA.
-
-    Attributes
-    ----------
-    area_threshold_m2 : float
-        Seuil de surface (m²) pour supprimer les micro-polygones (0 pour désactiver).
-    input_crs_fallback : str
-        CRS assumé si un fichier n'a pas de CRS (par défaut WGS84).
-    output_crs : str
-        CRS de sortie (par défaut WGS84).
-    metric_crs : str
-        CRS métrique temporaire pour les calculs de surface.
-    sample_unique_values : int
-        Taille d'échantillon max par colonne pour l'analyse sémantique légère.
-    similarity_threshold : float
-        Seuil de chevauchement moyen (Jaccard) au‑delà duquel une colonne est dite
-        “commune” (sinon “conflictuelle”).
-    """
-    area_threshold_m2: float = 5.0
-    input_crs_fallback: str = "EPSG:4326"
-    output_crs: str = "EPSG:4326"
-    metric_crs: str = "EPSG:3857"
-    sample_unique_values: int = 10
-    similarity_threshold: float = 0.30
-
-
-class ZadaMerger:
+class ZadaMerger(BaseMerger):    
     """
     Pipeline de fusion ZADA (POO).
 
@@ -75,10 +42,10 @@ class ZadaMerger:
     result.to_file("fusion.geojson", driver="GeoJSON")
     """
 
-    def __init__(self, config: Optional[MergeConfig] = None) -> None:
-        self.config = config or MergeConfig()
-        self._sources: List[gpd.GeoDataFrame] = []
-        self._column_analysis: Optional[Dict[str, Any]] = None
+#    def __init__(self, config: Optional[MergeConfig] = None) -> None:
+#        self.config = config or MergeConfig()
+#        self._sources: List[gpd.GeoDataFrame] = []
+#        self._column_analysis: Optional[Dict[str, Any]] = None
 
     # --------------------------------------------------------------------- #
     # Chargement & Préparation

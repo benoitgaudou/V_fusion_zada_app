@@ -7,7 +7,10 @@ import geopandas as gpd
 from flask import current_app, session
 
 from app.modules.file_loader import FileLoader, FileLoaderConfig
-from app.modules.fusion import MergeConfig, ZadaMerger
+# from app.modules.fusion import MergeConfig, ZadaMerger
+from app.modules.merger.config import MergeConfig
+from app.modules.merger.zada_merger import ZadaMerger
+from app.modules.merger.factory import create_merger
 
 
 def _get_paths() -> tuple[Path, Path, Path]:
@@ -46,8 +49,8 @@ def _get_merger(area_threshold: float | None = None) -> ZadaMerger:
         sample_unique_values=10,
         similarity_threshold=0.30,
     )
-    return ZadaMerger(mcfg)
-
+#    return ZadaMerger(mcfg)
+    return create_merger(current_app.config['ZADA_MERGER_CLASS'], mcfg)
 
 def _non_tech_columns(gdf: gpd.GeoDataFrame) -> list[str]:
     excluded_base = {'geometry', 'intersection_type', 'type', 'source', 'source_names'}

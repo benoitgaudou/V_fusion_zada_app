@@ -29,6 +29,9 @@ class Config:
     METRIC_CRS = "EPSG:3857"       # Web Mercator pour calculs métriques
     PROJ_NETWORK = False            # utile si besoin de l'activer
 
+    # ZADA Merger
+    ZADA_MERGER_CLASS = "default"  # clé pour choisir la classe de merger dans la factory
+
     # NLP (plus tard)
     NLP_MODEL_PATH = BASE_DIR / 'models'
     DEFAULT_SIMILARITY_THRESHOLD = 0.7
