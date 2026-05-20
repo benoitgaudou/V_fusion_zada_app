@@ -25,7 +25,7 @@
                         {{ form.files(class="form-control", accept=".shp,.geojson,.zip") }}
                         <div class="form-text">
                             <i class="fas fa-info-circle me-1"></i>
-                            Formats acceptés: .shp (avec .shx, .dbf), .geojson, .zip contenant des shapefiles
+                            Formats acceptés: .geojson, .zip contenant des shapefiles ou des geojson.
                         </div>
                         {% for error in form.files.errors %}
                             <div class="text-danger small">{{ error }}</div>

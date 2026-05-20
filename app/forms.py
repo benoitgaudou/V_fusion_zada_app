@@ -15,7 +15,7 @@ class FileUploadForm(FlaskForm):
     # MultipleFileField = vrai multi-upload (mieux que FileField + render_kw={"multiple": True})
     # forms.py (champ files)
     files = MultipleFileField(
-        "Fichiers (ZIP Shapefile / GeoJSON)",
+        "Fichiers (ZIP de Shapefile / ZIP de GEOJSON / multiples GeoJSON)",
         validators=[
             FileRequired("Veuillez sélectionner au moins un fichier."),
             FileAllowed(["zip", "geojson", "json"], "Formats acceptés : .zip / .geojson / .json"),
