@@ -64,11 +64,12 @@ class FileLoader:
 
         for idx, f in enumerate(uploaded_files, start=1):
             try:
-                gdf, stem = self.load_geofile(f)
+                layer_results = self.load_geofile(f)
                 # Harmonise CRS → sortie
-                gdf = self._ensure_output_crs(gdf)
-                results.append((gdf, stem))
-                logger.info(" [%d] %s : %d entités | CRS=%s", idx, stem, len(gdf), gdf.crs)
+                for gdf, stem in layer_results:
+                    gdf = self._ensure_output_crs(gdf)
+                    results.append((gdf, stem))
+                    logger.info(" [%d] %s : %d entités | CRS=%s", idx, stem, len(gdf), gdf.crs)
             except Exception as exc:
                 msg = f"[{idx}] {getattr(f, 'filename', str(f))}: {exc}"
                 logger.exception(msg)
@@ -89,7 +90,7 @@ class FileLoader:
     # ---------- Lecture unitaire ----------
     def load_geofile(
         self, file_or_path: Union[FileStorage, Path, str]
-    ) -> Tuple[gpd.GeoDataFrame, str]:
+    ) -> List[Tuple[gpd.GeoDataFrame, str]]:
         """Charge un fichier individuel (ZIP Shapefile ou GeoJSON)."""
         # Cas Flask: FileStorage
         if isinstance(file_or_path, FileStorage):
@@ -113,7 +114,7 @@ class FileLoader:
         raise FileLoadingError(f"Extension non supportée: {path.name}")
 
     # ---------- ZIP (Shapefile) ----------
-    def _read_zip_filestorage(self, fs: FileStorage, filename: str) -> Tuple[gpd.GeoDataFrame, str]:
+    def _read_zip_filestorage(self, fs: FileStorage, filename: str) -> List[Tuple[gpd.GeoDataFrame, str]]:
         zip_path = Path(self.cfg.upload_folder) / filename
         fs.save(zip_path)
         try:
@@ -122,35 +123,49 @@ class FileLoader:
             if not self.cfg.keep_extracted:
                 zip_path.unlink(missing_ok=True)
 
-    def _read_zip_path(self, zip_path: Path) -> Tuple[gpd.GeoDataFrame, str]:
+    def _read_zip_path(self, zip_path: Path) -> List[Tuple[gpd.GeoDataFrame, str]]:
         extract_dir = Path(self.cfg.upload_folder) / zip_path.stem
         extract_dir.mkdir(exist_ok=True)
+
         try:
             with zipfile.ZipFile(zip_path, "r") as zf:
                 self._safe_extract(zf, extract_dir)
-            shp = self._find_first_shp(extract_dir)
-            if shp is None:
-                raise FileLoadingError("Aucun .shp trouvé dans le ZIP.")
-            gdf = self._robust_read_vector(shp)
-            return gdf, zip_path.stem
-        except Exception:
-            # nettoyage extraction si on ne conserve pas
+
+            vector_files = self._find_vector_files(extract_dir)
+            if not vector_files:
+                raise FileLoadingError("Aucun fichier vectoriel trouvé dans le ZIP.")
+
+            results = []
+            for vector_path in vector_files:
+                try:
+                    gdf = self._read_vector_file(vector_path)
+                    # nom de couche = nom du ZIP + nom du fichier 
+                    layer_name = (f"{zip_path.stem}__{vector_path.stem}")
+                    results.append((gdf, layer_name))
+
+                    logger.info( "Layer loaded: %s (%d features)", layer_name, len(gdf) )
+                except Exception as exc:
+                    logger.exception("Erreur lecture couche %s : %s", vector_path, exc)
+
+            if not results:
+                raise FileLoadingError("Aucune couche vectorielle valide dans le ZIP.")
+
+            return results
+
+        finally:
             if not self.cfg.keep_extracted:
                 self._rmtree(extract_dir)
-            raise
 
     # ---------- GeoJSON ----------
-    def _read_geojson_filestorage(self, fs: FileStorage, filename: str) -> Tuple[gpd.GeoDataFrame, str]:
+    def _read_geojson_filestorage(self, fs: FileStorage, filename: str) -> List[Tuple[gpd.GeoDataFrame, str]]:
         # lecture via buffer mémoire pour compat Flask
         buf = io.BytesIO(fs.read())
-        gdf = gpd.read_file(buf)
-        gdf = self._post_read_fix(gdf)  # CRS etc.
-        return gdf, Path(filename).stem
+        gdf = self._read_geojson_vector(buf)
+        return [(gdf, Path(filename).stem)]
 
-    def _read_geojson_path(self, path: Path) -> Tuple[gpd.GeoDataFrame, str]:
-        gdf = gpd.read_file(path)
-        gdf = self._post_read_fix(gdf)
-        return gdf, path.stem
+    def _read_geojson_path(self, path: Path) -> List[Tuple[gpd.GeoDataFrame, str]]:
+        gdf = self._read_geojson_vector(path)
+        return [(gdf, path.stem)]
 
     # ---------- Impl. bas niveau ----------
     def _robust_read_vector(self, path: Path) -> gpd.GeoDataFrame:
@@ -187,8 +202,25 @@ class FileLoader:
         except Exception as exc:
             raise FileLoadingError(f"Echec lecture vectorielle: {exc}")
 
+    def _read_geojson_vector(self,path: Path ) -> gpd.GeoDataFrame:
+        try:
+            gdf = gpd.read_file(path)
+            return self._post_read_fix(gdf,src_path=path if isinstance(path, Path) else None)
+        except Exception as exc:
+            raise FileLoadingError(f"Echec lecture GeoJSON {path.name}: {exc}")
+
+    def _read_vector_file(self,path: Path) -> gpd.GeoDataFrame:
+        suffix = path.suffix.lower()
+
+        if suffix == ".shp":
+            return self._robust_read_vector(path)
+        elif suffix in {".geojson", ".json"}:
+            return self._read_geojson_vector(path)
+        else:
+            raise FileLoadingError(f"Format non supporté: {path.name}")
+
     # ---------- Helpers ----------
-    def _post_read_fix(self, gdf: gpd.GeoDataFrame, src_path: Optional[Path] = None) -> gdf:
+    def _post_read_fix(self, gdf: gpd.GeoDataFrame, src_path: Optional[Path] = None) -> gpd.GeoDataFrame:
         """Nettoyage post-lecture: CRS, limite features, geometry non‑nulles."""
         if self.cfg.max_features_debug is not None and len(gdf) > self.cfg.max_features_debug:
             gdf = gdf.iloc[: self.cfg.max_features_debug].copy()
@@ -206,8 +238,12 @@ class FileLoader:
 
     def _ensure_output_crs(self, gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """Reprojette vers le CRS de sortie si nécessaire."""
-        if gdf.crs is None or gdf.crs.to_string() != self.cfg.force_output_crs:
+        if gdf.crs is None:
+            gdf = gdf.set_crs(self.cfg.assume_input_crs,allow_override=True)
+
+        if gdf.crs.to_string() != self.cfg.force_output_crs:
             return gdf.to_crs(self.cfg.force_output_crs)
+
         return gdf
 
     def _pick_source_crs(self, vector_path: Path) -> Optional[str]:
@@ -223,12 +259,47 @@ class FileLoader:
         return None
 
     @staticmethod
-    def _find_first_shp(extract_dir: Path) -> Optional[Path]:
+    def _find_vector_files(extract_dir: Path) -> List[Path]:
+
+        supported = {".shp", ".geojson", ".json"}
+        vector_files = []
+
         for root, _, files in os.walk(extract_dir):
+            # ignore dossiers parasites MacOS
+            if "__MACOSX" in root:
+                continue
+
             for f in files:
-                if f.lower().endswith(".shp") and not f.startswith("."):
-                    return Path(root) / f
-        return None
+                # ignore les fichiers cachés (ex: .DS_Store) et les fichiers temporaires
+                if f.startswith("."):
+                    continue
+
+                path = Path(root) / f
+
+                if path.suffix.lower() in supported:
+                    vector_files.append(path)
+
+        return sorted(vector_files)
+
+
+#    @staticmethod
+#    def _find_all_shp(extract_dir: Path) -> List[Path]:
+#        shp_files = []
+#
+#        for root, _, files in os.walk(extract_dir):
+#            for f in files:
+#                if f.lower().endswith(".shp") and not f.startswith("."):
+#                    shp_files.append(Path(root) / f)
+#
+#        return sorted(shp_files)
+
+#    @staticmethod
+#    def _find_first_shp(extract_dir: Path) -> Optional[Path]:
+#        for root, _, files in os.walk(extract_dir):
+#            for f in files:
+#                if f.lower().endswith(".shp") and not f.startswith("."):
+#                    return Path(root) / f
+#        return None
 
     @staticmethod
     def _safe_extract(zf: zipfile.ZipFile, target: Path) -> None:
