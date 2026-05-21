@@ -45,6 +45,13 @@
                             <div class="text-danger small">{{ error }}</div>
                         {% endfor %}
                     </div>
+
+                    <div class="mb-3">
+                        {{ form.choix_zada_merger.label(class="form-label") }}
+                        <div class="input-group">
+                            {{ form.choix_zada_merger(class="form-select") }}
+                        </div>
+                    </div>                    
                     
                     <div class="d-grid">
                         {{ form.submit(class="btn btn-primary btn-lg") }}

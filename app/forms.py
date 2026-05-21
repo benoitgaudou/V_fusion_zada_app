@@ -30,6 +30,15 @@ class FileUploadForm(FlaskForm):
         description="Micro‑polygones sous ce seuil seront filtrés après fusion.",
     )
 
+    choix_zada_merger = SelectField(
+        "Zada Merger choice",
+        choices=[
+            ("default", "DD"),
+            ("titouan", "TT"),
+        ],
+        default="DD",
+    )
+
     submit = SubmitField("Charger")
 
 

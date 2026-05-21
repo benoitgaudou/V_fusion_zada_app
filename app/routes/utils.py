@@ -50,7 +50,7 @@ def _get_merger(area_threshold: float | None = None) -> ZadaMerger:
         similarity_threshold=0.30,
     )
 #    return ZadaMerger(mcfg)
-    return create_merger(current_app.config['ZADA_MERGER_CLASS'], mcfg)
+    return create_merger( session.get('choix_zada_merger', current_app.config['ZADA_MERGER_CLASS']), mcfg) 
 
 def _non_tech_columns(gdf: gpd.GeoDataFrame) -> list[str]:
     excluded_base = {'geometry', 'intersection_type', 'type', 'source', 'source_names'}

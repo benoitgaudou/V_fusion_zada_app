@@ -62,6 +62,7 @@ def upload_files():
             )
 
         session['area_threshold'] = float(form.area_threshold.data or 100.0)
+        session['choix_zada_merger'] = form.choix_zada_merger.data
         session['loaded_files'] = loaded_files_info
         session['stage_paths'] = stage_paths
         session['candidate_fields'] = sorted(candidate_fields_intersection) if candidate_fields_intersection else []
