@@ -48,46 +48,6 @@ class ZadaMerger(BaseMerger):
 #        self._column_analysis: Optional[Dict[str, Any]] = None
 
     # --------------------------------------------------------------------- #
-    # Chargement & Préparation
-    # --------------------------------------------------------------------- #
-    def load_sources(self, paths: Sequence[Path | str]) -> None:
-        self._sources.clear()
-        for idx, p in enumerate(paths):
-            path = Path(p)
-            try:
-                gdf = gpd.read_file(path)
-                if gdf.crs is None:
-                    logger.warning(
-                        "Le fichier %s n'a pas de CRS. On suppose %s.",
-                        path.name, self.config.input_crs_fallback
-                    )
-                    gdf = gdf.set_crs(self.config.input_crs_fallback, allow_override=True)
-                elif gdf.crs.to_string() != self.config.output_crs:
-                    gdf = gdf.to_crs(self.config.output_crs)
-
-                gdf = gdf[gdf.geometry.notna()]
-                gdf["geometry"] = gdf["geometry"].apply(self._clean_geometry)
-                gdf = gdf[gdf.geometry.notna()]
-
-                # Métadonnées
-                gdf["original_source_id"] = idx
-                gdf["original_source_name"] = path.stem
-
-                # Ajout simple du nom source sous forme z1, z2, etc.
-                gdf["source_names"] = f"z{idx + 1}"
-
-                self._sources.append(gdf)
-                logger.info("Chargé: %s (%d entités, CRS=%s)", path.name, len(gdf), gdf.crs)
-            except Exception as exc:
-                logger.error("Erreur de chargement %s: %s", path, exc)
-
-        if len(self._sources) < 2:
-            raise ValueError("Au moins deux sources sont nécessaires pour la fusion.")
-
-
-
-
-    # --------------------------------------------------------------------- #
     # Fusion principale
     # --------------------------------------------------------------------- #
     def merge(self) -> gpd.GeoDataFrame:
@@ -135,27 +95,6 @@ class ZadaMerger(BaseMerger):
     # --------------------------------------------------------------------- #
     # Utilitaires: nettoyage & colonnes
     # --------------------------------------------------------------------- #
-    @staticmethod
-    def _clean_geometry(geom: Optional[shapely_base.BaseGeometry]) -> Optional[shapely_base.BaseGeometry]:
-        """Nettoyage géométrique robuste, retourne Polygon/MultiPolygon ou None."""
-        if geom is None or geom.is_empty:
-            return None
-        try:
-            if not geom.is_valid:
-                # buffer(0) pour corriger les self-intersections
-                geom = geom.buffer(0)
-
-            if isinstance(geom, (Polygon, MultiPolygon)):
-                return geom
-
-            if isinstance(geom, GeometryCollection):
-                polys = [g for g in geom.geoms if isinstance(g, (Polygon, MultiPolygon))]
-                if not polys:
-                    return None
-                return MultiPolygon(polys) if len(polys) > 1 else polys[0]
-        except Exception:
-            return None
-        return None
     
     def _norm_after_overlay(self, name: str) -> str:
         s = unicodedata.normalize("NFKD", str(name)).encode("ascii", "ignore").decode("ascii")
