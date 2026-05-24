@@ -50,3 +50,4 @@ stage_geojson/
 Donnees/
 /.dockerignore
 /.venv
+app/modules/.DS_Store
