@@ -269,7 +269,8 @@ def intra_overlap_clean(list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_t
             merged_vector_1_2=gpd.GeoDataFrame(geometry=merged_geometry_1_2)
             merged_vector_1_2.reset_index(drop=True, inplace=True)
             merged_vector_1_2_join= merged_vector_1_2.join(final_attributes.drop(columns=['geometry']))
-            merged_vector_1_2_join.set_crs(epsg="2154", inplace=True)
+            merged_vector_1_2_join.set_crs(zada_1.crs, inplace=True)
+#            merged_vector_1_2_join.set_crs(epsg="2154", inplace=True)
             path=f"zada_intra_intersect_{i}.shp"
             i=i+1
             list_gdf_out.append(merged_vector_1_2_join)
