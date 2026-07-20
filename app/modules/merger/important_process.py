@@ -387,11 +387,14 @@ def fusion_zada(list_gdf_in: List[gpd.GeoDataFrame], col_zada='zada', col_to_rem
             merged_vector_1_2=gpd.GeoDataFrame(geometry=merged_geometry_1_2)
             merged_vector_1_2.reset_index(drop=True, inplace=True)
             merged_vector_1_2_join= merged_vector_1_2.join(final_attributes.drop(columns=['geometry']))
-            merged_vector_1_2_join.set_crs(epsg="2154", inplace=True)
+            merged_vector_1_2_join.set_crs(zada_1.crs, inplace=True)
+            # merged_vector_1_2_join.set_crs(epsg="2154", inplace=True)
             # change zada_1 to do the fusion with one another shp
             zada_1=merged_vector_1_2_join
 #        merged_vector_1_2_join.to_file(folder_out_path + "fusion_zada.shp")
         return(merged_vector_1_2_join)
+
+
 
 #endregion
 ##########
