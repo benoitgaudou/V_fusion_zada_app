@@ -29,11 +29,16 @@ class Config:
     METRIC_CRS = "EPSG:3857"       # Web Mercator pour calculs métriques
     PROJ_NETWORK = False            # utile si besoin de l'activer
 
-    # ZADA Merger 
+    # ZADA Merger
     # clé pour choisir la classe de merger dans la factory
     # "default", "modern"   -> ZadaMerger
     # "pairwise", "titouan" -> ZadaPairwiseMerger
-    ZADA_MERGER_CLASS = "titouan" 
+    ZADA_MERGER_CLASS = "titouan"
+
+    # Séparateur utilisé pour concaténer les valeurs d'attributs textuels conflictuels
+    # entre deux polygones qui se chevauchent (colonnes qualitatives uniquement).
+    # Ne concerne pas la fusion des noms de sources.
+    ATTRIBUTE_MERGE_SEPARATOR = "|*|"
 
 
     # NLP (plus tard)

@@ -18,6 +18,8 @@ from itertools import combinations
 from itertools import chain
 from random import random,seed,shuffle
 
+from app.config import Config
+
 
 
 #endregion
@@ -221,7 +223,7 @@ def intra_overlap_clean(list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_t
                                     elif str(zada_1[str(j)].iloc[idx_b]) == '0'or pd.isna(zada_1[str(j)].iloc[idx_b]):
                                         intersect_str_j = str(zada_1[str(j)].iloc[idx_a])
                                     else:
-                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a]) + '-' + str(zada_1[str(j)].iloc[idx_b])
+                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a]) + Config.ATTRIBUTE_MERGE_SEPARATOR + str(zada_1[str(j)].iloc[idx_b])
                                 else:
                                     if pd.isna(zada_1[str(j)].iloc[idx_a]):
                                         intersect_str_j=pd.NA
@@ -343,7 +345,7 @@ def fusion_zada(list_gdf_in: List[gpd.GeoDataFrame], col_zada='zada', col_to_rem
                                     elif str(zada_2[str(j)].iloc[idx_b]) == '0' or pd.isna(zada_2[str(j)].iloc[idx_b]):
                                         intersect_str_j = str(zada_1[str(j)].iloc[idx_a])
                                     else:
-                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a]) + '-' + str(zada_2[str(j)].iloc[idx_b])
+                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a]) + Config.ATTRIBUTE_MERGE_SEPARATOR + str(zada_2[str(j)].iloc[idx_b])
                                     intersection_data[j] = intersect_str_j
                             intersections.append(intersection_data)
             # Create gdf from intersections

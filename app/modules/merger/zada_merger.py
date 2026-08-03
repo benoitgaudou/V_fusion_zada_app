@@ -10,6 +10,7 @@ import pandas as pd
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, base as shapely_base
 from shapely.ops import unary_union
 
+from app.config import Config
 from app.modules.merger.config import MergeConfig
 from typing import List, Optional, Sequence, Tuple, Dict, Any
 from pathlib import Path
@@ -77,10 +78,10 @@ class ZadaMerger(BaseMerger):
             result = self._fold_columns_after_overlay(
                 result,
                 fuzzy_threshold=84,   # 78 = plus tolérant ; 88 = plus strict
-                join_sep=", "
+                join_sep=Config.ATTRIBUTE_MERGE_SEPARATOR
             )
             # Normalisation anti-"nan" sur les colonnes texte
-            result = self._sanitize_object_columns(result, sep=", ")
+            result = self._sanitize_object_columns(result, sep=Config.ATTRIBUTE_MERGE_SEPARATOR)
             logger.info("Post-overlay: %d→%d colonnes (pliage)", before_cols, len(result.columns))
         except Exception as e:
             logger.warning("Pliage post-overlay ignoré (RapidFuzz installé ?) : %s", e)
@@ -108,7 +109,7 @@ class ZadaMerger(BaseMerger):
             s = s[:-1]
         return "geom" if s == "geometry" else s
 
-    def _concat_dedup_vals(self, vals, sep=", "):
+    def _concat_dedup_vals(self, vals, sep=Config.ATTRIBUTE_MERGE_SEPARATOR):
         """Concaténation NA-safe + déduplication; ne casse PAS les valeurs contenant '+'."""
         seen, out = set(), []
         for v in vals:
@@ -127,7 +128,7 @@ class ZadaMerger(BaseMerger):
         self,
         gdf: gpd.GeoDataFrame,
         fuzzy_threshold: int = 84,
-        join_sep: str = ", ",
+        join_sep: str = Config.ATTRIBUTE_MERGE_SEPARATOR,
         reserved=("geometry","original_source_id","original_source_name","type","sources","source_names"),
     ) -> gpd.GeoDataFrame:
         try:
@@ -175,7 +176,7 @@ class ZadaMerger(BaseMerger):
             out["geometry"] = gdf.geometry
         return out
     
-    def _sanitize_object_columns(self, gdf: gpd.GeoDataFrame, sep: str = ", ") -> gpd.GeoDataFrame:
+    def _sanitize_object_columns(self, gdf: gpd.GeoDataFrame, sep: str = Config.ATTRIBUTE_MERGE_SEPARATOR) -> gpd.GeoDataFrame:
         """
         - remplace NaN par None
         - remplace les séparateurs [ , ; | ] par 'sep' (sans toucher aux '+')

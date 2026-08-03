@@ -49,7 +49,7 @@ class FileUploadForm(FlaskForm):
             ("default", "DD"),
             ("titouan", "TT"),
         ],
-        default="DD",
+        default="titouan",
     )
 
     crs_override = SelectField(
