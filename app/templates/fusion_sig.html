@@ -198,6 +198,10 @@ templates/fusion_sig.html - Cartographie thématique post-fusion
 {# <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"> #}
 {# <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script> #}
 
+<script>
+  // Bornes du résultat de fusion (calculées côté serveur) pour centrer la carte au chargement
+  window.ZADA_INITIAL_BOUNDS = {{ bounds | tojson }};
+</script>
 <script src="{{ url_for('static', filename='js/leaflet_script.js') }}"></script>
 <script>
   // Définir l'URL d'export une fois

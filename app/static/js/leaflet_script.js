@@ -37,6 +37,27 @@ class ZADAMapManager {
         return map;
     }
 
+    // Recentre la carte sur les couches actuellement affichées, ou sur les bornes
+    // du résultat de fusion transmises par le serveur si aucune couche n'est encore chargée.
+    fitToAllLayers(mapId) {
+        const map = this.maps.get(mapId);
+        if (!map) return;
+
+        const mapLayers = this.layers.get(mapId);
+        const layersWithBounds = mapLayers
+            ? Array.from(mapLayers.values()).filter(l => typeof l.getBounds === 'function')
+            : [];
+
+        if (layersWithBounds.length) {
+            const group = L.featureGroup(layersWithBounds);
+            map.fitBounds(group.getBounds(), { padding: [20, 20] });
+        } else if (window.ZADA_INITIAL_BOUNDS) {
+            map.fitBounds(window.ZADA_INITIAL_BOUNDS, { padding: [20, 20] });
+        } else {
+            map.setView(this.defaultCenter, this.defaultZoom);
+        }
+    }
+
     addBaseLayers(map) {
         const baseLayers = {
             'OpenStreetMap': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -605,7 +626,12 @@ document.addEventListener('DOMContentLoaded', () => {
     zadaMapManager = new ZADAMapManager();
 
     if (document.getElementById('map')) {
-        zadaMapManager.initializeMap('map');
+        const map = zadaMapManager.initializeMap('map');
+
+        // Centre la carte sur le résultat de fusion dès l'arrivée sur la page
+        if (window.ZADA_INITIAL_BOUNDS) {
+            map.fitBounds(window.ZADA_INITIAL_BOUNDS, { padding: [20, 20] });
+        }
 
         // Contrôles simples
         const resetBtn = document.getElementById('resetViewBtn');

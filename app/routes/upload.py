@@ -165,5 +165,11 @@ def fusion_sig():
         flash("Veuillez d'abord charger des fichiers (et fusionner).", 'warning')
         return redirect(url_for('main.home'))
 
+    bounds = meta.get('bounds')
+    leaflet_bounds = None
+    if bounds and len(bounds) == 4:
+        minx, miny, maxx, maxy = bounds
+        leaflet_bounds = [[miny, minx], [maxy, maxx]]
+
     form = FusionSIGForm()
-    return render_template('fusion_sig.html', form=form, loaded_files=loaded_files)
+    return render_template('fusion_sig.html', form=form, loaded_files=loaded_files, bounds=leaflet_bounds)
