@@ -5,8 +5,21 @@
 
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed, FileRequired, MultipleFileField
-from wtforms import SelectField, FloatField, SubmitField, TextAreaField
+from wtforms import SelectField, FloatField, StringField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, NumberRange, Optional
+
+# Valeur spéciale du SelectField déclenchant l'affichage du champ EPSG libre
+CRS_CUSTOM_VALUE = "__custom__"
+
+CRS_CHOICES = [
+    ("", "Auto-détection (recommandé)"),
+    ("EPSG:4326", "EPSG:4326 — WGS84 (GPS)"),
+    ("EPSG:3857", "EPSG:3857 — Web Mercator"),
+    ("EPSG:2154", "EPSG:2154 — Lambert 93 (France)"),
+    ("EPSG:32630", "EPSG:32630 — UTM 30N"),
+    ("EPSG:32631", "EPSG:32631 — UTM 31N"),
+    (CRS_CUSTOM_VALUE, "Autre (code EPSG personnalisé)"),
+]
 
 
 class FileUploadForm(FlaskForm):
@@ -37,6 +50,24 @@ class FileUploadForm(FlaskForm):
             ("titouan", "TT"),
         ],
         default="DD",
+    )
+
+    crs_override = SelectField(
+        "CRS des données sources",
+        choices=CRS_CHOICES,
+        default="",
+        validators=[Optional()],
+        description=(
+            "CRS à assumer pour les fichiers sources qui n'en définissent aucun "
+            "(ex: shapefile sans .prj). Laissez sur Auto-détection si vos fichiers "
+            "sont correctement géoréférencés."
+        ),
+    )
+
+    crs_custom = StringField(
+        "Code EPSG personnalisé",
+        validators=[Optional()],
+        render_kw={"placeholder": "ex: EPSG:32632"},
     )
 
     submit = SubmitField("Charger")

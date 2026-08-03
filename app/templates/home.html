@@ -51,8 +51,27 @@
                         <div class="input-group">
                             {{ form.choix_zada_merger(class="form-select") }}
                         </div>
-                    </div>                    
-                    
+                    </div>
+
+                    <div class="mb-3">
+                        {{ form.crs_override.label(class="form-label") }}
+                        <div class="input-group">
+                            {{ form.crs_override(class="form-select", id="crsOverrideSelect") }}
+                        </div>
+                        <div class="form-text">
+                            <i class="fas fa-info-circle me-1"></i>
+                            {{ form.crs_override.description }}
+                        </div>
+                    </div>
+
+                    <div class="mb-3" id="crsCustomWrapper" style="display: none;">
+                        {{ form.crs_custom.label(class="form-label") }}
+                        {{ form.crs_custom(class="form-control") }}
+                        {% for error in form.crs_custom.errors %}
+                            <div class="text-danger small">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
                     <div class="d-grid">
                         {{ form.submit(class="btn btn-primary btn-lg") }}
                     </div>
@@ -149,11 +168,19 @@
 document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('uploadForm');
     const submitBtn = form.querySelector('button[type="submit"]');
-    
+
     form.addEventListener('submit', function() {
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Chargement...';
         submitBtn.disabled = true;
     });
+
+    const crsSelect = document.getElementById('crsOverrideSelect');
+    const crsCustomWrapper = document.getElementById('crsCustomWrapper');
+    function toggleCrsCustom() {
+        crsCustomWrapper.style.display = crsSelect.value === '__custom__' ? 'block' : 'none';
+    }
+    crsSelect.addEventListener('change', toggleCrsCustom);
+    toggleCrsCustom();
 });
 </script>
 {% endblock %}

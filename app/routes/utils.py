@@ -22,12 +22,13 @@ def _get_paths() -> tuple[Path, Path, Path]:
     return uploads, stage, results
 
 
-def _get_loader() -> FileLoader:
+def _get_loader(crs_override: Optional[str] = None) -> FileLoader:
     uploads, _, _ = _get_paths()
+    assumed_crs = crs_override or current_app.config['DEFAULT_CRS']
     cfg = FileLoaderConfig(
         upload_folder=uploads,
         force_output_crs=current_app.config['DEFAULT_CRS'],
-        assume_input_crs=current_app.config['DEFAULT_CRS'],
+        assume_input_crs=assumed_crs,
         max_features_debug=None,
         allow_network_proj=bool(current_app.config.get('PROJ_NETWORK', False)),
         keep_extracted=False,
@@ -35,22 +36,23 @@ def _get_loader() -> FileLoader:
     return FileLoader(cfg)
 
 
-def _get_merger(area_threshold: float | None = None) -> ZadaMerger:
+def _get_merger(area_threshold: float | None = None, crs_override: Optional[str] = None) -> ZadaMerger:
     at = float(
         area_threshold
         if area_threshold is not None
         else session.get('area_threshold', current_app.config['DEFAULT_AREA_THRESHOLD'])
     )
+    fallback_crs = crs_override or session.get('crs_override') or current_app.config['DEFAULT_CRS']
     mcfg = MergeConfig(
         area_threshold_m2=at,
-        input_crs_fallback=current_app.config['DEFAULT_CRS'],
+        input_crs_fallback=fallback_crs,
         output_crs=current_app.config['DEFAULT_CRS'],
         metric_crs=current_app.config['METRIC_CRS'],
         sample_unique_values=10,
         similarity_threshold=0.30,
     )
 #    return ZadaMerger(mcfg)
-    return create_merger( session.get('choix_zada_merger', current_app.config['ZADA_MERGER_CLASS']), mcfg) 
+    return create_merger( session.get('choix_zada_merger', current_app.config['ZADA_MERGER_CLASS']), mcfg)
 
 def _non_tech_columns(gdf: gpd.GeoDataFrame) -> list[str]:
     excluded_base = {'geometry', 'intersection_type', 'type', 'source', 'source_names'}

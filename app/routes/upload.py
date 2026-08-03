@@ -9,7 +9,7 @@ from flask import flash, redirect, render_template, request, session, send_file,
 
 from . import main_bp
 from .utils import _get_loader, _get_merger, _get_paths, _non_tech_columns
-from app.forms import FileUploadForm, FusionSIGForm
+from app.forms import CRS_CUSTOM_VALUE, FileUploadForm, FusionSIGForm
 from app.modules.exceptions import FileLoadingError
 from app.modules.nlp.card_exports import export_gdf
 
@@ -23,8 +23,21 @@ def upload_files():
                 flash(f'{field}: {error}', 'error')
         return redirect(url_for('main.home'))
 
+    crs_choice = form.crs_override.data
+    if crs_choice == CRS_CUSTOM_VALUE:
+        crs_choice = (form.crs_custom.data or '').strip()
+    crs_override = crs_choice or None
+
+    if crs_override:
+        try:
+            from pyproj import CRS
+            CRS.from_user_input(crs_override)
+        except Exception:
+            flash(f'CRS invalide : "{crs_override}"', 'error')
+            return redirect(url_for('main.home'))
+
     try:
-        loader = _get_loader()
+        loader = _get_loader(crs_override=crs_override)
         _, stage_folder, results_folder = _get_paths()
 
         uploaded_files = request.files.getlist('files')
@@ -63,6 +76,7 @@ def upload_files():
 
         session['area_threshold'] = float(form.area_threshold.data or 100.0)
         session['choix_zada_merger'] = form.choix_zada_merger.data
+        session['crs_override'] = crs_override
         session['loaded_files'] = loaded_files_info
         session['stage_paths'] = stage_paths
         session['candidate_fields'] = sorted(candidate_fields_intersection) if candidate_fields_intersection else []
@@ -72,7 +86,7 @@ def upload_files():
             return redirect(url_for('main.home'))
 
         at = float(session.get('area_threshold', 100.0))
-        merger = _get_merger(area_threshold=at)
+        merger = _get_merger(area_threshold=at, crs_override=crs_override)
         merger.load_sources(stage_paths)
         result_gdf = merger.merge()
 

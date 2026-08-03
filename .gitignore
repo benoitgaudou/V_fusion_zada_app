@@ -51,3 +51,4 @@ Donnees/
 /.dockerignore
 /.venv
 app/modules/.DS_Store
+.DS_Store
