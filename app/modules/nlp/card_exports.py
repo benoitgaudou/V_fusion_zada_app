@@ -4,6 +4,8 @@ from typing import Dict, Any, List, Tuple
 import pandas as pd
 import geopandas as gpd
 
+from app.config import Config
+
 
 #________________ sélection à partir des résultats_____________
 # ---------------- sélection à partir des résultats ----------------
@@ -23,13 +25,19 @@ def build_selection_gdf(
     mode = str(results_df.iloc[0].get("mode", "semantic")).lower()
 
     # 2) Sous-ensemble géométrique dans l’ordre du ranking
-    sel = corpus_gdf.iloc[results_df["row_idx"]][["id_zone", "corpus_texte", "geometry"]].copy()
+    has_source_col = Config.SOURCE_NAMES_COLUMN in corpus_gdf.columns
+    select_cols = ["id_zone", "corpus_texte", "geometry"]
+    if has_source_col:
+        select_cols = [Config.SOURCE_NAMES_COLUMN] + select_cols
+    sel = corpus_gdf.iloc[results_df["row_idx"]][select_cols].copy()
     sel = sel.reset_index(drop=True)
 
     # 3) Colonnes communes
     sel["nlp_rank"]    = pd.Series(range(1, len(sel) + 1), dtype="int32")
     sel["nlp_preview"] = sel["corpus_texte"].astype(str).str.slice(0, 200)
     sel["nlp_mode"]    = mode
+
+    source_cols = [Config.SOURCE_NAMES_COLUMN] if has_source_col else []
 
     # 4) Valeur selon le mode
     if mode == "keyword":
@@ -41,7 +49,7 @@ def build_selection_gdf(
         else:
             vals = np.zeros(len(sel), dtype=np.float32)
         sel["nlp_score"] = vals.astype("float32")
-        keep_cols = ["id_zone", "nlp_score", "nlp_rank", "nlp_preview", "nlp_mode", "geometry"]
+        keep_cols = ["id_zone"] + source_cols + ["nlp_score", "nlp_rank", "nlp_preview", "nlp_mode", "geometry"]
     else:
         # semantic
         if "similarite" in results_df.columns:
@@ -52,7 +60,7 @@ def build_selection_gdf(
         else:
             vals = np.zeros(len(sel), dtype=np.float32)
         sel["nlp_similarity"] = vals.astype("float32")
-        keep_cols = ["id_zone", "nlp_similarity", "nlp_rank", "nlp_preview", "nlp_mode", "geometry"]
+        keep_cols = ["id_zone"] + source_cols + ["nlp_similarity", "nlp_rank", "nlp_preview", "nlp_mode", "geometry"]
 
     # 5) Normalisation CRS -> EPSG:4326
     if sel.geometry.crs is not None:

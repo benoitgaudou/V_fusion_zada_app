@@ -9,6 +9,7 @@ from abc import abstractmethod
 from typing import Any, Dict, List, Sequence, Optional
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, base as shapely_base
 
+from app.config import Config
 from app.modules.merger.config import MergeConfig
 
 # --- Configuration logging minimale (modifie le niveau dans ton script principal) ---
@@ -62,7 +63,7 @@ class BaseMerger:
                 gdf["original_source_name"] = path.stem
 
                 # Ajout simple du nom source sous forme z1, z2, etc.
-                gdf["source_names"] = f"z{idx + 1}"
+                gdf[Config.SOURCE_NAMES_COLUMN] = f"z{idx + 1}"
 
                 self._sources.append(gdf)
                 logger.info("Chargé: %s (%d entités, CRS=%s)", path.name, len(gdf), gdf.crs)

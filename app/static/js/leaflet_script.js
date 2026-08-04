@@ -106,7 +106,8 @@ class ZADAMapManager {
             p.thematic_field ? ['Champ', p.thematic_field] : null,
             p.thematic_value ? ['Valeur', p.thematic_value] : null,
             p.thematic_label ? ['Classe', p.thematic_label] : null,
-            p.source_names ? ['Sources', p.source_names] : null,
+            // Doit rester synchronisé avec Config.SOURCE_NAMES_COLUMN (app/config.py)
+            p.genSources ? ['Sources', p.genSources] : null,
         ].filter(Boolean);
 
         let html = `<div class="thematic-popup"><h6><i class="fas fa-palette me-1"></i><strong>Cartographie thématique</strong></h6>`;

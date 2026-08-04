@@ -40,6 +40,11 @@ class Config:
     # Ne concerne pas la fusion des noms de sources.
     ATTRIBUTE_MERGE_SEPARATOR = "|*|"
 
+    # Nom de la colonne listant les sources d'origine d'un polygone fusionné
+    # (ex: "z2+z4"). Identique dans les deux algorithmes de fusion.
+    # Limité à 10 caractères pour rester compatible avec le format Shapefile (DBF).
+    SOURCE_NAMES_COLUMN = "genSources"
+
 
     # NLP (plus tard)
     NLP_MODEL_PATH = BASE_DIR / 'models'

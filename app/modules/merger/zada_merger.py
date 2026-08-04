@@ -10,7 +10,10 @@ import pandas as pd
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, base as shapely_base
 from shapely.ops import unary_union
 
+from functools import reduce
+
 from app.config import Config
+from app.modules.merger.attribute_merge import merge_attribute_values, normalize_attribute_value, SOURCE_ATTRIBUTE_SEPARATOR
 from app.modules.merger.config import MergeConfig
 from typing import List, Optional, Sequence, Tuple, Dict, Any
 from pathlib import Path
@@ -122,14 +125,16 @@ class ZadaMerger(BaseMerger):
                 if t and t.lower() != "nan" and t not in seen:
                     seen.add(t)
                     out.append(t)
-        return sep.join(out) if out else None
+        if not out:
+            return None
+        return reduce(lambda acc, val: merge_attribute_values(acc, val, separator=sep), out)
 
     def _fold_columns_after_overlay(
         self,
         gdf: gpd.GeoDataFrame,
         fuzzy_threshold: int = 84,
         join_sep: str = Config.ATTRIBUTE_MERGE_SEPARATOR,
-        reserved=("geometry","original_source_id","original_source_name","type","sources","source_names"),
+        reserved=("geometry","original_source_id","original_source_name","type",Config.SOURCE_NAMES_COLUMN),
     ) -> gpd.GeoDataFrame:
         try:
             from rapidfuzz import fuzz
@@ -179,17 +184,17 @@ class ZadaMerger(BaseMerger):
     def _sanitize_object_columns(self, gdf: gpd.GeoDataFrame, sep: str = Config.ATTRIBUTE_MERGE_SEPARATOR) -> gpd.GeoDataFrame:
         """
         - remplace NaN par None
-        - remplace les séparateurs [ , ; | ] par 'sep' (sans toucher aux '+')
+        - normalise les valeurs texte via `normalize_attribute_value` (déduplication
+          des éléments déjà séparés par `sep`)
         - supprime les chaînes vides
         """
-        pat = re.compile(r"\s*[,\|;]\s*")
         out = gdf.copy()
         for c in out.columns:
-            if c == "geometry" or not pd.api.types.is_object_dtype(out[c]):
+            if c == "geometry" or not pd.api.types.is_string_dtype(out[c]):
                 continue
             col = out[c]
             col = col.where(~col.isna(), None)
-            col = col.apply(lambda x: pat.sub(sep, x) if isinstance(x, str) else x)
+            col = col.apply(lambda x: normalize_attribute_value(x, sep) if isinstance(x, str) else x)
             col = col.apply(lambda x: None if (isinstance(x, str) and not x.strip()) else x)
             out[c] = col
         return out
@@ -316,8 +321,7 @@ class ZadaMerger(BaseMerger):
                         continue
 
                     inter["type"] = "intersection"
-                    inter["sources"] = f"{i}+{j}"
-                    inter["source_names"] = f"{name1}+{name2}"
+                    inter[Config.SOURCE_NAMES_COLUMN] = f"{name1}{SOURCE_ATTRIBUTE_SEPARATOR}{name2}"
                     results.append(inter)
                     logger.info("→ %d intersections", len(inter))
                 except Exception as exc:
@@ -353,8 +357,7 @@ class ZadaMerger(BaseMerger):
                         logger.info("→ Aucune zone unique.")
                         continue
                     diff["type"] = "difference"
-                    diff["sources"] = str(i)
-                    diff["source_names"] = name
+                    diff[Config.SOURCE_NAMES_COLUMN] = name
                     diffs.append(diff)
                     logger.info("→ %d zones uniques", len(diff))
                 except Exception as exc:
@@ -365,8 +368,7 @@ class ZadaMerger(BaseMerger):
                 copy = gdf.copy()
                 name = str(copy["original_source_name"].iloc[0])
                 copy["type"] = "original"
-                copy["sources"] = str(i)
-                copy["source_names"] = name
+                copy[Config.SOURCE_NAMES_COLUMN] = name
                 diffs.append(copy)
         return diffs
 

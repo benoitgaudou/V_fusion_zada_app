@@ -5,6 +5,7 @@ from typing import Optional, List
 import pandas as pd
 import geopandas as gpd
 from .utils import clean_value
+from app.config import Config
 
 def build_corpus_from_fusion_gdf(
     gdf: gpd.GeoDataFrame,
@@ -17,7 +18,7 @@ def build_corpus_from_fusion_gdf(
     exclude_exact = exclude_exact or {
         "geometry", "original_source_id", "Original_source_id",
         "original_source_name", "Original_source_name",
-        "intersection_type", "type", "sources", "source_names", "id", 'nan','non',
+        "intersection_type", "type", Config.SOURCE_NAMES_COLUMN, "id", 'nan','non',
     }
     pats = exclude_patterns or ["nom*", "id*", "source*", "original*", "intersection*"]
 
@@ -47,4 +48,6 @@ def build_corpus_from_fusion_gdf(
          "geometry": [geom for *_, geom in records]},
         crs="EPSG:4326"
     )
+    if Config.SOURCE_NAMES_COLUMN in gdf_wgs.columns:
+        out[Config.SOURCE_NAMES_COLUMN] = gdf_wgs[Config.SOURCE_NAMES_COLUMN].reset_index(drop=True)
     return out

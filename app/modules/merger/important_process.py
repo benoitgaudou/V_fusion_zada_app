@@ -18,7 +18,7 @@ from itertools import combinations
 from itertools import chain
 from random import random,seed,shuffle
 
-from app.config import Config
+from app.modules.merger.attribute_merge import merge_attribute_values, normalize_attribute_value, separator_for_column
 
 
 
@@ -218,12 +218,10 @@ def intra_overlap_clean(list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_t
                         for j in col_to_str:
                             if j in zada_1.columns:
                                 if j.lower() != col_zada:
-                                    if str(zada_1[str(j)].iloc[idx_a]) == '0' or pd.isna(zada_1[str(j)].iloc[idx_a]):
-                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_b])
-                                    elif str(zada_1[str(j)].iloc[idx_b]) == '0'or pd.isna(zada_1[str(j)].iloc[idx_b]):
-                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a])
-                                    else:
-                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a]) + Config.ATTRIBUTE_MERGE_SEPARATOR + str(zada_1[str(j)].iloc[idx_b])
+                                    intersect_str_j = merge_attribute_values(
+                                        zada_1[str(j)].iloc[idx_a], zada_1[str(j)].iloc[idx_b],
+                                        separator=separator_for_column(j)
+                                    )
                                 else:
                                     if pd.isna(zada_1[str(j)].iloc[idx_a]):
                                         intersect_str_j=pd.NA
@@ -338,15 +336,12 @@ def fusion_zada(list_gdf_in: List[gpd.GeoDataFrame], col_zada='zada', col_to_rem
                                     else : 
                                         intersection_data[j] = int(intersect_sum)
                             #
-                            for j in col_to_str: # for qualitative variable : paste the value of each polygon 
+                            for j in col_to_str: # for qualitative variable : paste the value of each polygon
                                 if j in zada_1.columns and j in zada_2.columns:
-                                    if str(zada_1[str(j)].iloc[idx_a]) == '0' or pd.isna(zada_1[str(j)].iloc[idx_a]):
-                                        intersect_str_j = str(zada_2[str(j)].iloc[idx_b])
-                                    elif str(zada_2[str(j)].iloc[idx_b]) == '0' or pd.isna(zada_2[str(j)].iloc[idx_b]):
-                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a])
-                                    else:
-                                        intersect_str_j = str(zada_1[str(j)].iloc[idx_a]) + Config.ATTRIBUTE_MERGE_SEPARATOR + str(zada_2[str(j)].iloc[idx_b])
-                                    intersection_data[j] = intersect_str_j
+                                    intersection_data[j] = merge_attribute_values(
+                                        zada_1[str(j)].iloc[idx_a], zada_2[str(j)].iloc[idx_b],
+                                        separator=separator_for_column(j)
+                                    )
                             intersections.append(intersection_data)
             # Create gdf from intersections
             if intersections == []: # if no intersections keep the shp as it is
@@ -394,6 +389,14 @@ def fusion_zada(list_gdf_in: List[gpd.GeoDataFrame], col_zada='zada', col_to_rem
             # change zada_1 to do the fusion with one another shp
             zada_1=merged_vector_1_2_join
 #        merged_vector_1_2_join.to_file(folder_out_path + "fusion_zada.shp")
+        # Normalise les valeurs d'attributs isolées (jamais passées par merge_attribute_values,
+        # ex: entités sans chevauchement) pour appliquer le même séparateur/dédoublonnage.
+        for j in col_to_str:
+            if j in merged_vector_1_2_join.columns:
+                sep_j = separator_for_column(j)
+                merged_vector_1_2_join[j] = merged_vector_1_2_join[j].apply(
+                    lambda v: v if pd.isna(v) else normalize_attribute_value(v, sep_j)
+                )
         return(merged_vector_1_2_join)
 
 

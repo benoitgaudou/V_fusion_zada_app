@@ -6,6 +6,7 @@ from typing import Optional
 import geopandas as gpd
 from flask import current_app, session
 
+from app.config import Config
 from app.modules.file_loader import FileLoader, FileLoaderConfig
 # from app.modules.fusion import MergeConfig, ZadaMerger
 from app.modules.merger.config import MergeConfig
@@ -55,7 +56,7 @@ def _get_merger(area_threshold: float | None = None, crs_override: Optional[str]
     return create_merger( session.get('choix_zada_merger', current_app.config['ZADA_MERGER_CLASS']), mcfg)
 
 def _non_tech_columns(gdf: gpd.GeoDataFrame) -> list[str]:
-    excluded_base = {'geometry', 'intersection_type', 'type', 'source', 'source_names'}
+    excluded_base = {'geometry', 'intersection_type', 'type', 'source', Config.SOURCE_NAMES_COLUMN.lower()}
     prefixes_to_exclude = ('original', 'source', 'id')
 
     try:

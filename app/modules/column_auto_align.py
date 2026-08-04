@@ -8,6 +8,8 @@ from collections import defaultdict
 import pandas as pd
 import geopandas as gpd
 
+from app.config import Config
+
 # --- dépendances optionnelles ---
 try:
     from rapidfuzz import fuzz
@@ -55,7 +57,7 @@ class AutoAlignCfg:
     emb_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     emb_threshold: float = 0.78          # cosine
     join_sep: str = ", "
-    reserved_cols: Tuple[str, ...] = ("geometry","original_source_id","original_source_name","type","sources","source_names")
+    reserved_cols: Tuple[str, ...] = ("geometry","original_source_id","original_source_name","type",Config.SOURCE_NAMES_COLUMN)
     save_mapping_json: str | None = "out/col_mapping.json"  # persistance
     load_mapping_json: str | None = None   # pour réappliquer un mapping validé
     auto_grow: bool = True               # apprend les nouvelles colonnes à la volée

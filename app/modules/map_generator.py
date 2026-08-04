@@ -11,6 +11,8 @@ import geopandas as gpd
 import pandas as pd
 import re
 
+from app.config import Config
+
 logger = logging.getLogger(__name__)
 
 
@@ -214,7 +216,7 @@ class MapDataGenerator:
     ) -> tuple[gpd.GeoDataFrame, dict, Optional[list[list[float]]]]:
             """
             Construit un GDF prêt à l'export à partir d'un champ 'field_name'.
-            Colonnes: source_names  (si présent), thematic_value, thematic_color, geometry (EPSG:4326).
+            Colonnes: Config.SOURCE_NAMES_COLUMN (si présent), thematic_value, thematic_color, geometry (EPSG:4326).
             Retourne (gdf_export, legend, bounds).
             """
             res = self.generate_thematic_geojson(gdf, field_name=field_name, palette_name=palette_name)
@@ -245,11 +247,11 @@ class MapDataGenerator:
             gdf_export["thematic_value"] = series.astype(str).where(series.notna(), other="N/A")
             gdf_export["thematic_color"] = gdf_export["thematic_value"].map(color_map).fillna("#808080")
 
-            # Garder source_name si présent
+            # Garder la colonne des sources si présente
             cols = ["thematic_value", "thematic_color", "geometry"]
-            if "source_name" in gdf_export.columns:
-                cols = ["source_name"] + cols
-                gdf_export["source_name"] = gdf_export["source_name"].astype(str)
+            if Config.SOURCE_NAMES_COLUMN in gdf_export.columns:
+                cols = [Config.SOURCE_NAMES_COLUMN] + cols
+                gdf_export[Config.SOURCE_NAMES_COLUMN] = gdf_export[Config.SOURCE_NAMES_COLUMN].astype(str)
 
             gdf_export = gdf_export[cols]
             return gdf_export, legend, bounds
@@ -265,7 +267,7 @@ class MapDataGenerator:
 
         excluded = {
             "geometry", "original_source_id", "original_source_name",
-            "intersection_type", "source_pair", "source_names", "sources",
+            "intersection_type", "source_pair", Config.SOURCE_NAMES_COLUMN,
         }
         # normaliser excluded
         excluded_norm = {self._norm(x) for x in excluded}
