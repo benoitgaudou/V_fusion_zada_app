@@ -188,7 +188,8 @@ def intra_overlap_clean(
 #        os.makedirs(folder_out_path, exist_ok=True)
         for gdf_i in list_gdf: # for each file : read and merge overlapping vectors
             # print(gdf_i.drop(columns=['geometry']).columns)
-            zada_1=filter_geometries(gdf_i)
+            # explode : un MultiPolygon d'entrée devient N lignes de Polygon simples
+            zada_1=filter_geometries(gdf_i).explode(index_parts=False, ignore_index=True)
             print('zada columns', zada_1.columns)
             # clean columns
             for j in col_to_sum:
@@ -279,6 +280,9 @@ def intra_overlap_clean(
                     zada_1_diff = gpd.overlay(zada_1, intersect_vector_1_2, how='difference')
                     zada_1_diff = zada_1_diff[~zada_1_diff['geometry'].apply(contains_linestring)] # remove string
                     zada_1_diff['geometry'] = zada_1_diff['geometry'].apply(convert_to_multipolygon) # convert "geometrycollection" entities in polygon if they are
+                    # Éclatement des MultiPolygon en polygones simples (1 ligne = 1 géométrie simple, attributs dupliqués)
+                    zada_1_diff = zada_1_diff.explode(index_parts=False, ignore_index=True)
+                    intersect_vector_1_2 = intersect_vector_1_2.explode(index_parts=False, ignore_index=True)
                     # Filtrage des micro-polygones sur le résultat final uniquement (le découpage reste complet)
                     zada_1_diff = _filter_small_geoms(zada_1_diff, area_threshold_m2, metric_crs)
                     intersect_vector_1_2_out = _filter_small_geoms(intersect_vector_1_2, area_threshold_m2, metric_crs)
@@ -334,8 +338,9 @@ def fusion_zada(
         for i in range(1,(int(len(list_gdf_modified)))):    
             # read new file
             zada_2=list_gdf_modified[i]  
-            # keep valid geometries of the shp  
-            zada_2=filter_geometries(zada_2)
+            # keep valid geometries of the shp
+            # explode : un MultiPolygon d'entrée devient N lignes de Polygon simples
+            zada_2=filter_geometries(zada_2).explode(index_parts=False, ignore_index=True)
             # initialise intersections list
             intersections = []
             intersect=[]
@@ -403,6 +408,10 @@ def fusion_zada(
                 zada_2_diff = gpd.overlay(zada_2, intersect_vector_1_2, how='difference')
                 zada_2_diff = zada_2_diff[~zada_2_diff['geometry'].apply(contains_linestring)]
                 zada_2_diff['geometry'] = zada_2_diff['geometry'].apply(convert_to_multipolygon)
+                # Éclatement des MultiPolygon en polygones simples (1 ligne = 1 géométrie simple, attributs dupliqués)
+                zada_1_diff = zada_1_diff.explode(index_parts=False, ignore_index=True)
+                zada_2_diff = zada_2_diff.explode(index_parts=False, ignore_index=True)
+                intersect_vector_1_2 = intersect_vector_1_2.explode(index_parts=False, ignore_index=True)
                 # Filtrage des micro-polygones sur le résultat final uniquement (le découpage reste complet)
                 zada_1_diff = _filter_small_geoms(zada_1_diff, area_threshold_m2, metric_crs)
                 zada_2_diff = _filter_small_geoms(zada_2_diff, area_threshold_m2, metric_crs)
