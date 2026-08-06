@@ -12,6 +12,7 @@ from flask import jsonify, request, send_file, session
 
 from . import main_bp
 from .utils import _non_tech_columns
+from app.config import Config
 from app.modules.map_generator import MapDataGenerator
 from app.modules.nlp.card_exports import (
     export_from_results,
@@ -237,7 +238,10 @@ def api_map_export():
             return jsonify({'success': False, 'error': f"Champ '{field_name}' introuvable"}), 404
 
         gen = MapDataGenerator()
-        gdf_export, legend, _ = gen.build_thematic_gdf(gdf_source, field_name=field_name, palette_name=palette)
+        target_crs = session.get('crs_override') or Config.DEFAULT_CRS
+        gdf_export, legend, _ = gen.build_thematic_gdf(
+            gdf_source, field_name=field_name, palette_name=palette, target_crs=target_crs
+        )
         if fmt == 'geojson':
             data = export_geojson_bytes(gdf_export)
         elif fmt == 'gpkg':

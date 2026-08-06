@@ -48,6 +48,20 @@ def clean_string(s):
     s = ''.join(c for c in s if unicodedata.category(c) != 'Mn')
     return s.lower()
 
+def _filter_small_geoms(gdf: gpd.GeoDataFrame, area_threshold_m2: float, metric_crs: str = "EPSG:3857") -> gpd.GeoDataFrame:
+    """
+    Retire les géométries dont l'aire (m²) est sous `area_threshold_m2`.
+    À appliquer uniquement sur des fragments déjà découpés (diff/intersection),
+    juste avant l'assemblage final — jamais sur une intersection brute avant découpe :
+    sinon les deux polygones sources ne sont pas découpés à cet endroit et restent
+    chevauchants, ce qui régénère de nouveaux micro-fragments lors des fusions suivantes.
+    """
+    if gdf.empty or area_threshold_m2 <= 0 or gdf.crs is None:
+        return gdf
+    areas = gdf.geometry.to_crs(metric_crs).area
+    return gdf[areas >= area_threshold_m2].copy()
+
+
 def contains_linestring(geom):
     """
     Check whether a list of geometries contains lines
@@ -154,7 +168,10 @@ def col_classif(list_gdf: List[gpd.GeoDataFrame], col_to_remove=[]):
 # collect all zada shp file paths
 
 #def intra_overlap_clean(folder_in, col_zada='zada', folder_out='modified/', col_to_remove=[]):
-def intra_overlap_clean(list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_to_remove=[]) -> List[gpd.GeoDataFrame]:
+def intra_overlap_clean(
+    list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_to_remove=[],
+    area_threshold_m2: float = 0.0, metric_crs: str = "EPSG:3857",
+) -> List[gpd.GeoDataFrame]:
     i=1
     print('i test', i)
 #    list_gdf = collect_shp_files(folder_in)
@@ -183,7 +200,7 @@ def intra_overlap_clean(list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_t
             #
             intersections = []
 #            intersect=[]
-            for idx_a, idx_b in combinations(range(len(zada_1)), 2): # look whether vectors overlap two by two 
+            for idx_a, idx_b in combinations(range(len(zada_1)), 2): # look whether vectors overlap two by two
                 geom_z1 = zada_1.geometry.iloc[idx_a]
                 geom_z2 = zada_1.geometry.iloc[idx_b]
                 if geom_z1 is not None and geom_z2 is not None:
@@ -258,13 +275,17 @@ def intra_overlap_clean(list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_t
                         intersect_vector_1_2= intersect_vector_1_2[~intersect_vector_1_2['geometry'].is_empty]
                     intersect_vector_1_2['geometry'] = intersect_vector_1_2['geometry'].apply(convert_to_multipolygon)
                     # geometrical fusion : difference between the initial vector and the intersection, then merge (=fusion) resulting difference and the intersection
+                    # (découpage avec TOUTES les intersections, y compris minuscules, pour ne jamais laisser de chevauchement résiduel)
                     zada_1_diff = gpd.overlay(zada_1, intersect_vector_1_2, how='difference')
                     zada_1_diff = zada_1_diff[~zada_1_diff['geometry'].apply(contains_linestring)] # remove string
-                    zada_1_diff['geometry'] = zada_1_diff['geometry'].apply(convert_to_multipolygon) # convert "geometrycollection" entities in polygon if they are 
-                    # 
-                    merged_geometry_1_2 = list(zada_1_diff.geometry) + list(intersect_vector_1_2.geometry) # combined geometry
+                    zada_1_diff['geometry'] = zada_1_diff['geometry'].apply(convert_to_multipolygon) # convert "geometrycollection" entities in polygon if they are
+                    # Filtrage des micro-polygones sur le résultat final uniquement (le découpage reste complet)
+                    zada_1_diff = _filter_small_geoms(zada_1_diff, area_threshold_m2, metric_crs)
+                    intersect_vector_1_2_out = _filter_small_geoms(intersect_vector_1_2, area_threshold_m2, metric_crs)
+                    #
+                    merged_geometry_1_2 = list(zada_1_diff.geometry) + list(intersect_vector_1_2_out.geometry) # combined geometry
                     # Create final geodf
-                    final_attributes = pd.concat([zada_1_diff,intersect_vector_1_2], ignore_index=True)                    
+                    final_attributes = pd.concat([zada_1_diff,intersect_vector_1_2_out], ignore_index=True)
             # export the resulting shp
             merged_vector_1_2=gpd.GeoDataFrame(geometry=merged_geometry_1_2)
             merged_vector_1_2.reset_index(drop=True, inplace=True)
@@ -282,9 +303,15 @@ def intra_overlap_clean(list_gdf: List[gpd.GeoDataFrame], col_zada='zada', col_t
 ##########
 #region 5. Fusion zada
 
-def fusion_zada(list_gdf_in: List[gpd.GeoDataFrame], col_zada='zada', col_to_remove=[]) -> gpd.GeoDataFrame:
+def fusion_zada(
+    list_gdf_in: List[gpd.GeoDataFrame], col_zada='zada', col_to_remove=[],
+    area_threshold_m2: float = 0.0, metric_crs: str = "EPSG:3857",
+) -> gpd.GeoDataFrame:
 #    folder_modified=intra_overlap_clean(folder_in, col_zada=col_zada, folder_out=folder_ir_file, col_to_remove=col_to_remove)
-    list_gdf_modified=intra_overlap_clean(list_gdf_in, col_zada=col_zada, col_to_remove=col_to_remove)
+    list_gdf_modified=intra_overlap_clean(
+        list_gdf_in, col_zada=col_zada, col_to_remove=col_to_remove,
+        area_threshold_m2=area_threshold_m2, metric_crs=metric_crs,
+    )
     if not list_gdf_modified:
         print("list_gdf is empty or None")
         return None   # ou raise, ou sys.exit(1)
@@ -368,17 +395,22 @@ def fusion_zada(list_gdf_in: List[gpd.GeoDataFrame], col_zada='zada', col_to_rem
                     intersect_vector_1_2= intersect_vector_1_2[~intersect_vector_1_2['geometry'].is_empty]
                 intersect_vector_1_2['geometry'] = intersect_vector_1_2['geometry'].apply(convert_to_multipolygon)
                 # geometrical fusion : difference between the main vector and the intersections, then merge (=fusion) resulting difference and the intersection
-                zada_1_diff = gpd.overlay(zada_1, intersect_vector_1_2, how='difference') # warning : need to move by hand on QGIS the node to the next one : 372259.25001912325 6382544.4007045636 0 
+                # (découpage avec TOUTES les intersections, y compris minuscules, pour ne jamais laisser de chevauchement résiduel)
+                zada_1_diff = gpd.overlay(zada_1, intersect_vector_1_2, how='difference') # warning : need to move by hand on QGIS the node to the next one : 372259.25001912325 6382544.4007045636 0
                 zada_1_diff = zada_1_diff[~zada_1_diff['geometry'].apply(contains_linestring)]
                 zada_1_diff['geometry'] = zada_1_diff['geometry'].apply(convert_to_multipolygon)
                 # geometrical fusion : difference between the initial second vector and the intersections, then merge (=fusion) resulting difference and the intersection
                 zada_2_diff = gpd.overlay(zada_2, intersect_vector_1_2, how='difference')
                 zada_2_diff = zada_2_diff[~zada_2_diff['geometry'].apply(contains_linestring)]
                 zada_2_diff['geometry'] = zada_2_diff['geometry'].apply(convert_to_multipolygon)
+                # Filtrage des micro-polygones sur le résultat final uniquement (le découpage reste complet)
+                zada_1_diff = _filter_small_geoms(zada_1_diff, area_threshold_m2, metric_crs)
+                zada_2_diff = _filter_small_geoms(zada_2_diff, area_threshold_m2, metric_crs)
+                intersect_vector_1_2_out = _filter_small_geoms(intersect_vector_1_2, area_threshold_m2, metric_crs)
                 # merge both cut vectors with the intersections geometries
-                merged_geometry_1_2 = list(zada_1_diff.geometry) + list(zada_2_diff.geometry) + list(intersect_vector_1_2.geometry)
+                merged_geometry_1_2 = list(zada_1_diff.geometry) + list(zada_2_diff.geometry) + list(intersect_vector_1_2_out.geometry)
                 # Create final geodf
-                final_attributes = pd.concat([zada_1_diff, zada_2_diff,intersect_vector_1_2], ignore_index=True)
+                final_attributes = pd.concat([zada_1_diff, zada_2_diff,intersect_vector_1_2_out], ignore_index=True)
             ## end of the else ##
             # export final shp
             merged_vector_1_2=gpd.GeoDataFrame(geometry=merged_geometry_1_2)

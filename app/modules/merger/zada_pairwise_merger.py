@@ -20,6 +20,10 @@ class ZadaPairwiseMerger(BaseMerger):
 #        for gdf in self._sources[1:]:
 #            merged = gpd.overlay(merged, gdf, how="union")
 
-        merged_zada = fusion_zada(self._sources, col_zada='zada', col_to_remove=[])
+        merged_zada = fusion_zada(
+            self._sources, col_zada='zada', col_to_remove=[],
+            area_threshold_m2=self.config.area_threshold_m2,
+            metric_crs=self.config.metric_crs,
+        )
 
         return merged_zada

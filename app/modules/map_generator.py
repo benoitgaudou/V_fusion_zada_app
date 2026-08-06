@@ -213,42 +213,36 @@ class MapDataGenerator:
         gdf: gpd.GeoDataFrame,
         field_name: str,
         palette_name: str = "default",
+        target_crs: str = Config.DEFAULT_CRS,
     ) -> tuple[gpd.GeoDataFrame, dict, Optional[list[list[float]]]]:
             """
             Construit un GDF prêt à l'export à partir d'un champ 'field_name'.
-            Colonnes: Config.SOURCE_NAMES_COLUMN (si présent), thematic_value, thematic_color, geometry (EPSG:4326).
+            Ne garde que les entités ayant une valeur pour ce champ.
+            Colonnes: Config.SOURCE_NAMES_COLUMN (si présent), thematic_value, geometry.
             Retourne (gdf_export, legend, bounds).
             """
             res = self.generate_thematic_geojson(gdf, field_name=field_name, palette_name=palette_name)
             if not res.get("success"):
                 raise ValueError(res.get("error") or "Génération thématique échouée.")
 
-            # Reproduire le mapping valeur->couleur utilisé dans generate_thematic_geojson
-            geojson = res["geojson"]
             legend = res["legend"]
             bounds = self.get_map_bounds(gdf)  # en WGS84
 
-            # On repart du GDF original pour éviter la conversion JSON->GDF
-            gdf_copy = gdf.copy()
-            if gdf_copy.crs and gdf_copy.crs.to_string() != "EPSG:4326":
-                gdf_copy = gdf_copy.to_crs("EPSG:4326")
-            elif gdf_copy.crs is None:
-                gdf_copy = gdf_copy.set_crs("EPSG:4326")
-
-            # Refaire la logique value/color comme dans generate_thematic_geojson
+            # Ne garder que les entités ayant une valeur pour le champ sélectionné
             series = gdf[field_name]
-            s_valid = series.dropna()
-            unique_vals = s_valid.unique()
-            palette = self.categorical_palettes.get(palette_name, self.categorical_palettes["default"])
-            values_sorted = pd.Series(unique_vals).astype(str).sort_values(key=lambda s: s.str.lower()).tolist()
-            color_map = {val: palette[i % len(palette)] for i, val in enumerate(values_sorted)}
+            gdf_valid = gdf[series.notna()].copy()
 
-            gdf_export = gdf_copy.copy()
-            gdf_export["thematic_value"] = series.astype(str).where(series.notna(), other="N/A")
-            gdf_export["thematic_color"] = gdf_export["thematic_value"].map(color_map).fillna("#808080")
+            if gdf_valid.crs and gdf_valid.crs.to_string() != target_crs:
+                gdf_export = gdf_valid.to_crs(target_crs)
+            elif gdf_valid.crs is None:
+                gdf_export = gdf_valid.set_crs(target_crs)
+            else:
+                gdf_export = gdf_valid
+
+            gdf_export["thematic_value"] = gdf_export[field_name].astype(str)
 
             # Garder la colonne des sources si présente
-            cols = ["thematic_value", "thematic_color", "geometry"]
+            cols = ["thematic_value", "geometry"]
             if Config.SOURCE_NAMES_COLUMN in gdf_export.columns:
                 cols = [Config.SOURCE_NAMES_COLUMN] + cols
                 gdf_export[Config.SOURCE_NAMES_COLUMN] = gdf_export[Config.SOURCE_NAMES_COLUMN].astype(str)
